@@ -1,3 +1,0 @@
-
-
-in datacenter-prj, create a playbook to install phpPgAdmin for postgresql.

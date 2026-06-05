@@ -5,6 +5,8 @@ Created on Mar 28, 2023
 """
 import configparser
 import os
+from pathlib import Path
+from .paths import project_subdir
 
 
 class IniFileConstants(object):
@@ -34,15 +36,15 @@ class Ec2Constants(IniFileConstants):
 
 
 class ProjectDirectories:
-    # directory where the datacenter project is downloaded from github
-    __datacenter_dir = os.getenv("DATACENTER_DIR")
-    ACCESS_DIR = f"{__datacenter_dir}/access"
-    CONFIG_DIR = f"{__datacenter_dir}/config"
-    TEMPLATES_DIR = f"{__datacenter_dir}/project/templates"
-    CONSTANTS_DIR = f"{__datacenter_dir}/project/constants"
-    TEST_DIR = f"{__datacenter_dir}/project/tests"
+    # Prefer repository-relative paths, fall back to DATACENTER_DIR if set
+    REPO_ROOT = project_subdir(".").parent
+    ACCESS_DIR = project_subdir("access")
+    CONFIG_DIR = project_subdir("config")
+    TEMPLATES_DIR = project_subdir("project", "templates")
+    CONSTANTS_DIR = project_subdir("project", "constants")
+    TEST_DIR = project_subdir("project", "tests")
 
 
 class ProjectFiles:
-    EC2_CONSTANTS_FILE = f"{ProjectDirectories.CONSTANTS_DIR}/ec2.ini"
-    CLOUDINIT_TEMPLATE = f"{ProjectDirectories.TEMPLATES_DIR}/cloudinit.yml.j2"
+    EC2_CONSTANTS_FILE = Path(ProjectDirectories.CONSTANTS_DIR) / "ec2.ini"
+    CLOUDINIT_TEMPLATE = Path(ProjectDirectories.TEMPLATES_DIR) / "cloudinit.yml.j2"

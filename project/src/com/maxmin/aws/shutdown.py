@@ -42,14 +42,8 @@ if __name__ == "__main__":
     if not os.getenv("AWS_DEFAULT_REGION"):
         raise AwsException("environment variable AWS_DEFAULT_REGION not set!")
 
-    # directory where the datacenter project is downloaded from github
-    datacenter_dir = os.getenv("DATACENTER_DIR")
-
-    if not datacenter_dir:
-        """
-        see: constants.ProjectDirectories class
-        """
-        raise AwsException("environment variable DATACENTER_DIR not set!")
+    # repository root (prefer repo-relative paths over DATACENTER_DIR env var)
+    datacenter_dir = ProjectDirectories.REPO_ROOT
 
     datacenter_config_file = sys.argv[1]
     hosted_zone_config_file = sys.argv[2]

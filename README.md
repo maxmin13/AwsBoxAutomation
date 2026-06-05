@@ -112,3 +112,32 @@ psql -U postgres
 
 ```
 <br>
+
+## Testing ##
+
+This project uses pytest for unit testing and simple integration checks.
+
+- Install test dependencies:
+
+```bash
+pip install -r requirements.txt
+pip install pytest
+```
+
+- Basic `pytest` configuration can be added in a `pytest.ini` file with:
+
+```ini
+[pytest]
+minversion = 6.0
+testpaths = tests
+```
+
+- Place tests under the `tests/` tree mirroring the package layout (for example, `tests/src/comtest/...`).
+
+- Run the test suite:
+
+```bash
+pytest -q
+```
+
+If you want, I can add `pytest` to `requirements.txt`, create `pytest.ini`, and add an example test to `tests/`.
