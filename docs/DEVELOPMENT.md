@@ -7,6 +7,7 @@ This document explains how to prepare a Fedora box for developing `AwsBoxAutomat
 - Fedora 38 or newer
 - Python 3.11 or newer
 - `git`
+- `awscli`
 
 ## Install system dependencies
 
@@ -14,8 +15,24 @@ This document explains how to prepare a Fedora box for developing `AwsBoxAutomat
 sudo dnf update -y
 sudo dnf install -y \
   git python3 python3-venv python3-pip python3-devel \
-  gcc gcc-c++ libffi-devel openssl-devel make redhat-rpm-config
+  gcc gcc-c++ libffi-devel openssl-devel make redhat-rpm-config \
+  awscli
 ```
+
+Everything else is installed inside the virtual environment via `pip`:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+```
+
+| Layer | Key packages |
+|---|---|
+| **Runtime** (`requirements.txt`) | `ansible` + `ansible-core`, `boto3` / `botocore` (AWS SDK), `moto` (AWS mocking), `docker`, `Jinja2`, `cryptography` |
+| **Development** (`requirements-dev.txt`) | `pytest`, `pytest-cov`, `pytest-mock`, `moto`, `black`, `flake8`, `pycodestyle`, `cfn-lint` |
+
+> `awscli` is the only AWS-related tool installed system-wide. The AWS SDK (`boto3`) and Ansible's `amazon.aws` collection are installed inside the venv so their versions are pinned and isolated.
 
 ## Clone the project
 
@@ -90,35 +107,55 @@ ansible-playbook -b -K -vvv playbooks/postgresql.yml
 ansible-playbook -b -K -vvv playbooks/nginx.yml
 ```
 
-## Optional: reproducible pins with pip-tools
-
-```bash
-pip install pip-tools
-
-pip-compile requirements.in        # generates requirements.txt
-pip-compile requirements-dev.in    # generates requirements-dev.txt
-pip-sync requirements.txt requirements-dev.txt
-```
-
-> Warning: `pip-sync` will remove packages that are not listed in the specified requirements files.
 
 ## AWS credentials
 
-Recommended: install `awscli` and run `aws configure`.
+Run `aws configure` to set up your credentials:
 
-```bash
-sudo dnf install -y awscli
-aws configure
+`aws configure` is an interactive wizard that prompts for four values:
+
+```
+AWS Access Key ID [None]: AKIAIOSFODNN7EXAMPLE
+AWS Secret Access Key [None]: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+Default region name [None]: eu-west-1
+Default output format [None]: json
 ```
 
-Alternatively, export credentials directly for the current shell session:
+| Prompt | What to enter |
+|---|---|
+| **Access Key ID** | From AWS Console → IAM → Users → Security credentials → Create access key |
+| **Secret Access Key** | Shown once at creation time — copy it before closing the dialog |
+| **Region** | The AWS region you target (e.g. `eu-west-1`, `us-east-1`) |
+| **Output format** | `json`, `yaml`, `text`, or `table` — `json` is the default |
 
-```bash
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
-export AWS_DEFAULT_REGION=...
+The wizard writes two files:
+
+```ini
+# ~/.aws/credentials
+[default]
+aws_access_key_id = AKIAIOSFODNN7EXAMPLE
+aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/...
+
+# ~/.aws/config
+[default]
+region = eu-west-1
+output = json
 ```
 
+To configure additional named profiles (e.g. for separate staging and prod accounts):
+
+```bash
+aws configure --profile staging
+aws configure --profile prod
+```
+
+Use a profile with `--profile <name>` or by setting `export AWS_PROFILE=staging`.
+
+The AWS SDK (`boto3`) and the `amazon.aws` Ansible collection resolve credentials in this order:
+
+1. Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`)
+2. `~/.aws/credentials` file (set by `aws configure`)
+3. IAM instance role (when running on an EC2 instance)
 ## Verify the environment
 
 ```bash

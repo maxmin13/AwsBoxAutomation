@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# Bootstraps a Fedora development environment for AwsBoxAutomation.
+#
+# What it does:
+#   1. Updates system packages and installs build tools, Python 3, and awscli
+#   2. Creates (or upgrades) a Python virtual environment at .venv/
+#   3. Installs runtime and development dependencies from requirements*.txt
+#
+# After running this script:
+#   - Activate the venv with: source .venv/bin/activate
+#   - Configure AWS credentials with: aws configure
 set -euo pipefail
 
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -36,9 +46,6 @@ Done! The Fedora development environment is ready.
 Activate it with:
   source .venv/bin/activate
 
-If you want reproducible pins, install pip-tools inside the activated environment:
-  pip install pip-tools
-  pip-compile requirements.in
-  pip-compile requirements-dev.in
-  pip-sync requirements.txt requirements-dev.txt
+Configure AWS credentials with:
+  aws configure
 EOF
