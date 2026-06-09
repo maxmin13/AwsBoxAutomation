@@ -9,8 +9,7 @@ and Nginx are done with Ansible.</br>
 ## Local work machine requirements: ##
 
 - Fedora 38
-- Python 3.11.4
-- ansible 2.14.5
+- Python 3.12
 
 ## Configure the AWS credentials and default region in your work machine: ##
 

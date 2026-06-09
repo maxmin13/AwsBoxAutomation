@@ -17,7 +17,7 @@ cd "$REPO_ROOT"
 echo "Setting up Fedora development environment for AwsBoxAutomation..."
 
 readonly SYSTEM_PACKAGES=(
-  git python3 python3-venv python3-pip python3-devel
+  git python3.12 python3.12-devel
   gcc gcc-c++ libffi-devel openssl-devel make redhat-rpm-config awscli
 )
 
@@ -28,9 +28,9 @@ sudo dnf install -y "${SYSTEM_PACKAGES[@]}"
 echo "Preparing Python virtual environment..."
 if [ -d ".venv" ]; then
   echo "Notice: .venv already exists and will be reused."
-  python3 -m venv --upgrade .venv
+  python3.12 -m venv --upgrade .venv
 else
-  python3 -m venv .venv
+  python3.12 -m venv .venv
 fi
 
 source .venv/bin/activate

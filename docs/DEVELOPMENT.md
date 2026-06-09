@@ -5,35 +5,74 @@ This document explains how to prepare a Fedora box for developing `AwsBoxAutomat
 ## Prerequisites
 
 - Fedora 38 or newer
-- Python 3.11 or newer
-- `git`
-- `awscli`
+- Visual Studio Code
 
 ## Install system dependencies
+
+This installs Python 3.12, build tools, and `awscli`. Run this before creating the virtual environment.
 
 ```bash
 sudo dnf update -y
 sudo dnf install -y \
-  git python3 python3-venv python3-pip python3-devel \
+  git python3.12 python3.12-devel \
   gcc gcc-c++ libffi-devel openssl-devel make redhat-rpm-config \
   awscli
 ```
 
-Everything else is installed inside the virtual environment via `pip`:
+## Configure GitHub SSH access
+
+Generate an SSH key on the VM:
+
+```bash
+ssh-keygen -t ed25519 -C "maxmin130170@gmail.com"
+```
+
+Print the public key:
+
+```bash
+cat ~/.ssh/id_ed25519.pub
+```
+
+Add it to GitHub: **Settings → SSH and GPG keys → New SSH key**, paste the output above and save.
+
+Test the connection:
+
+```bash
+ssh -T git@github.com
+```
+
+Expected output: `Hi maxmin13! You've successfully authenticated...`
+
+## Create the project
 
 ```bash
 mkdir ~/Projects && cd ~/Projects
 ```
 
 ```bash
-git clone <repo-url> AwsBoxAutomation
+git clone git@github.com:maxmin13/AwsBoxAutomation.git
 cd AwsBoxAutomation
 ```
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
+echo ".venv/" >> .gitignore
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
+```
+
+> Each new shell starts with no venv active — re-run `source .venv/bin/activate` every time you open a new terminal.
+
+Verify the virtual environment is active:
+
+```bash
+which python   # should show .venv/bin/python
+```
+
+Deactivate when done:
+
+```bash
+deactivate
 ```
 
 ```bash
@@ -49,28 +88,43 @@ pip install -r requirements-dev.txt
 
 > `awscli` is the only AWS-related tool installed system-wide. The AWS SDK (`boto3`) and Ansible's `amazon.aws` collection are installed inside the venv so their versions are pinned and isolated.
 
-## Clone the project
+## Configure Claude Code in Visual Studio Code
 
-```bash
-git clone <repo-url> AwsBoxAutomation
-cd AwsBoxAutomation
+Claude Code is Anthropic's AI coding assistant. The VS Code extension brings it directly into the editor.
+
+### Install the extension
+
+1. Open VS Code.
+2. Open the Extensions view with `Ctrl+Shift+X`.
+3. Search for `Claude Code`.
+4. Install the extension published by `Anthropic` (extension ID: `anthropic.claude-code`).
+
+Alternatively, add it to `.vscode/extensions.json` so VS Code recommends it to every contributor:
+
+```json
+{
+  "recommendations": [
+    "anthropic.claude-code"
+  ]
+}
 ```
 
-## Create and activate a virtual environment
+### Sign in
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-```
+1. Open the Command Palette with `Ctrl+Shift+P` and run **Claude Code: Sign In**.
+2. Complete the browser authentication flow with your Anthropic account.
+3. Once authenticated the Claude Code icon appears in the Activity Bar.
 
-## Install dependencies
+### Key shortcuts
 
-```bash
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
-```
+| Action | Shortcut |
+|---|---|
+| Open Claude Code panel | `Ctrl+Shift+C` |
+| Inline code fix | `Ctrl+.` then select Claude Code |
+| Accept suggestion | `Tab` |
+| Dismiss suggestion | `Esc` |
 
+> Claude Code requires an Anthropic account. Usage is billed per token — see [claude.ai/code](https://claude.ai/code) for pricing and plan details.
 
 ## Formatters and linters
 
