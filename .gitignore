@@ -5,5 +5,4 @@ __pycache__
 .pydevproject
 .settings
 .dbeaver
-.venv
-.vscode/
+.venv/

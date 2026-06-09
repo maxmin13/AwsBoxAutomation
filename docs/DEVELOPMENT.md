@@ -209,10 +209,11 @@ Create a `.vscode/settings.json` file in the repository root with at least the f
 {
   "files.restoreUndoStack": false,
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-  "python.linting.enabled": true,
-  "python.linting.flake8Enabled": true,
-  "python.formatting.provider": "black",
-  "python.formatting.blackArgs": ["--line-length=79"]
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+  "black-formatter.args": ["--line-length=79"],
+  "flake8.args": ["--max-line-length=200"]
 }
 ```
 
@@ -225,8 +226,10 @@ Create a `.vscode/extensions.json` file to recommend helpful extensions for this
   "recommendations": [
     "ms-python.python",
     "ms-python.vscode-pylance",
-    "GoogleCloudTools.cloudcode",
-    "anthropic.claude-code"
+    "ms-python.flake8",
+    "ms-python.black-formatter",
+    "redhat.ansible",
+    "GoogleCloudTools.cloudcode"
   ]
 }
 ```
@@ -235,8 +238,10 @@ Create a `.vscode/extensions.json` file to recommend helpful extensions for this
 |---|---|---|
 | `ms-python.python` | Microsoft | Core Python support: IntelliSense, debugging, test runner integration, and virtual environment management |
 | `ms-python.vscode-pylance` | Microsoft | Fast, type-aware language server built on Pyright — provides rich auto-complete, type checking, and import resolution |
+| `ms-python.flake8` | Microsoft | Flake8 linter integration — replaces the deprecated `python.linting.flake8Enabled` setting |
+| `ms-python.black-formatter` | Microsoft | Black formatter integration — replaces the deprecated `python.formatting.provider` setting |
+| `redhat.ansible` | Red Hat | Ansible language support: syntax highlighting, auto-complete, and linting via `ansible-lint` |
 | `GoogleCloudTools.cloudcode` | Google Cloud | Tools for working with Google Cloud services, Kubernetes, and Cloud Run directly from VS Code |
-| `anthropic.claude-code` | Anthropic | AI coding assistant — inline suggestions, chat, and code generation powered by Claude |
 
 ### Install extensions
 
