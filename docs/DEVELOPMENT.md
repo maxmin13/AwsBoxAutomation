@@ -22,6 +22,21 @@ sudo dnf install -y \
 Everything else is installed inside the virtual environment via `pip`:
 
 ```bash
+mkdir ~/Projects && cd ~/Projects
+```
+
+```bash
+git clone <repo-url> AwsBoxAutomation
+cd AwsBoxAutomation
+```
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+```
+
+```bash
 source .venv/bin/activate
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
