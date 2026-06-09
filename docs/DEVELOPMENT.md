@@ -216,6 +216,8 @@ Create a `.vscode/settings.json` file in the repository root with at least the f
 }
 ```
 
+### Recommended extensions
+
 Create a `.vscode/extensions.json` file to recommend helpful extensions for this workspace:
 
 ```json
@@ -228,8 +230,6 @@ Create a `.vscode/extensions.json` file to recommend helpful extensions for this
   ]
 }
 ```
-
-### Recommended extensions
 
 | Extension | Publisher | Purpose |
 |---|---|---|
