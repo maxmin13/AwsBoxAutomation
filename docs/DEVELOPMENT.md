@@ -88,44 +88,6 @@ pip install -r requirements-dev.txt
 
 > `awscli` is the only AWS-related tool installed system-wide. The AWS SDK (`boto3`) and Ansible's `amazon.aws` collection are installed inside the venv so their versions are pinned and isolated.
 
-## Configure Claude Code in Visual Studio Code
-
-Claude Code is Anthropic's AI coding assistant. The VS Code extension brings it directly into the editor.
-
-### Install the extension
-
-1. Open VS Code.
-2. Open the Extensions view with `Ctrl+Shift+X`.
-3. Search for `Claude Code`.
-4. Install the extension published by `Anthropic` (extension ID: `anthropic.claude-code`).
-
-Alternatively, add it to `.vscode/extensions.json` so VS Code recommends it to every contributor:
-
-```json
-{
-  "recommendations": [
-    "anthropic.claude-code"
-  ]
-}
-```
-
-### Sign in
-
-1. Open the Command Palette with `Ctrl+Shift+P` and run **Claude Code: Sign In**.
-2. Complete the browser authentication flow with your Anthropic account.
-3. Once authenticated the Claude Code icon appears in the Activity Bar.
-
-### Key shortcuts
-
-| Action | Shortcut |
-|---|---|
-| Open Claude Code panel | `Ctrl+Shift+C` |
-| Inline code fix | `Ctrl+.` then select Claude Code |
-| Accept suggestion | `Tab` |
-| Dismiss suggestion | `Esc` |
-
-> Claude Code requires an Anthropic account. Usage is billed per token — see [claude.ai/code](https://claude.ai/code) for pricing and plan details.
-
 ## Formatters and linters
 
 ```bash
@@ -263,19 +225,36 @@ Create a `.vscode/extensions.json` file to recommend helpful extensions for this
   "recommendations": [
     "ms-python.python",
     "ms-python.vscode-pylance",
-    "GoogleCloudTools.cloudcode"
+    "GoogleCloudTools.cloudcode",
+    "anthropic.claude-code"
   ]
 }
 ```
 
-To install the Cloud Code extension:
+### Install extensions
 
-1. Open VS Code.
-2. Open the Extensions view with `Ctrl+Shift+X`.
-3. Search for `Cloud Code`.
-4. Install the extension published by `GoogleCloudTools`.
+1. Open VS Code and open the Extensions view with `Ctrl+Shift+X`.
+2. Search for `Cloud Code` and install the extension published by `GoogleCloudTools`.
+3. Search for `Claude Code` and install the extension published by `Anthropic` (extension ID: `anthropic.claude-code`).
 
-Alternatively, open the Command Palette with `Ctrl+Shift+P`, type `Extensions: Install Extensions`, and enter `GoogleCloudTools.cloudcode`.
+Alternatively, open the Command Palette with `Ctrl+Shift+P`, type `Extensions: Install Extensions`, and enter the extension ID.
+
+### Configure Claude Code
+
+Claude Code is Anthropic's AI coding assistant. After installing the extension:
+
+1. Open the Command Palette with `Ctrl+Shift+P` and run **Claude Code: Sign In**.
+2. Complete the browser authentication flow with your Anthropic account.
+3. Once authenticated the Claude Code icon appears in the Activity Bar.
+
+| Action | Shortcut |
+|---|---|
+| Open Claude Code panel | `Ctrl+Shift+C` |
+| Inline code fix | `Ctrl+.` then select Claude Code |
+| Accept suggestion | `Tab` |
+| Dismiss suggestion | `Esc` |
+
+> Claude Code requires an Anthropic account. Usage is billed per token — see [claude.ai/code](https://claude.ai/code) for pricing and plan details.
 
 When VS Code is running, reload the window after updating `.vscode/settings.json` or `.vscode/extensions.json` so the new workspace settings take effect.
 
