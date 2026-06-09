@@ -216,8 +216,6 @@ Create a `.vscode/settings.json` file in the repository root with at least the f
 }
 ```
 
-If you use Windows or WSL for development, adjust `python.defaultInterpreterPath` to the path of the activated virtual environment interpreter.
-
 Create a `.vscode/extensions.json` file to recommend helpful extensions for this workspace:
 
 ```json
@@ -230,6 +228,15 @@ Create a `.vscode/extensions.json` file to recommend helpful extensions for this
   ]
 }
 ```
+
+### Recommended extensions
+
+| Extension | Publisher | Purpose |
+|---|---|---|
+| `ms-python.python` | Microsoft | Core Python support: IntelliSense, debugging, test runner integration, and virtual environment management |
+| `ms-python.vscode-pylance` | Microsoft | Fast, type-aware language server built on Pyright — provides rich auto-complete, type checking, and import resolution |
+| `GoogleCloudTools.cloudcode` | Google Cloud | Tools for working with Google Cloud services, Kubernetes, and Cloud Run directly from VS Code |
+| `anthropic.claude-code` | Anthropic | AI coding assistant — inline suggestions, chat, and code generation powered by Claude |
 
 ### Install extensions
 
