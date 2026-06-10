@@ -1,6 +1,6 @@
 # AWS Box Automation Development
 
-This document explains how to prepare a Fedora box for developing `AwsBoxAutomation` using a Python virtual environment.
+This document explains how to prepare a Fedora box for developing `AwsBoxAutomation`.
 
 ## Prerequisites
 
@@ -9,19 +9,19 @@ This document explains how to prepare a Fedora box for developing `AwsBoxAutomat
 
 ## Install system dependencies
 
-This installs Python 3.12, build tools, and `awscli`. Run this before creating the virtual environment.
+Installs Python 3.12, Node.js 20 (for the Electron GUI), build tools, and `awscli`.
 
 ```bash
 sudo dnf update -y
 sudo dnf install -y \
   git python3.12 python3.12-devel \
   gcc gcc-c++ libffi-devel openssl-devel make redhat-rpm-config \
-  awscli
+  awscli nodejs npm
 ```
 
 ## Configure GitHub SSH access
 
-Generate an SSH key on the VM:
+Generate an SSH key:
 
 ```bash
 ssh-keygen -t ed25519 -C "maxmin130170@gmail.com"
@@ -43,43 +43,25 @@ ssh -T git@github.com
 
 Expected output: `Hi maxmin13! You've successfully authenticated...`
 
-## Create the project
+## Clone the project
 
 ```bash
 mkdir ~/Projects && cd ~/Projects
-```
-
-```bash
 git clone git@github.com:maxmin13/AwsBoxAutomation.git
 cd AwsBoxAutomation
 ```
 
+## Python environment
+
 ```bash
 python3.12 -m venv .venv
-echo ".venv/" >> .gitignore
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
-```
-
-> Each new shell starts with no venv active — re-run `source .venv/bin/activate` every time you open a new terminal.
-
-Verify the virtual environment is active:
-
-```bash
-which python   # should show .venv/bin/python
-```
-
-Deactivate when done:
-
-```bash
-deactivate
-```
-
-```bash
-source .venv/bin/activate
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
+
+> Each new shell starts with no venv active — re-run `source .venv/bin/activate` every time you open a new terminal.
 
 | Layer | Key packages |
 |---|---|
@@ -87,6 +69,26 @@ pip install -r requirements-dev.txt
 | **Development** (`requirements-dev.txt`) | `pytest`, `pytest-cov`, `pytest-mock`, `moto`, `black`, `flake8`, `pycodestyle`, `cfn-lint` |
 
 > `awscli` is the only AWS-related tool installed system-wide. The AWS SDK (`boto3`) and Ansible's `amazon.aws` collection are installed inside the venv so their versions are pinned and isolated.
+
+## Electron GUI
+
+The `app/` directory contains an Electron + React desktop GUI for running Make, Provision, and Delete without the command line.
+
+```bash
+cd app
+npm install
+npm run dev      # starts Vite dev server + Electron with hot reload
+```
+
+> **Linux note:** VSCode sets `ELECTRON_RUN_AS_NODE=1` in its environment, which causes `require('electron')` to return a path string instead of the Electron module. The `dev` and `start` npm scripts call `env -u ELECTRON_RUN_AS_NODE electron .` to unset it before launching. If you run electron directly, unset the variable first: `env -u ELECTRON_RUN_AS_NODE electron .`
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Starts Vite dev server + Electron with hot reload |
+| `npm start` | Production build then launches Electron |
+| `npm test` | Runs Vitest test suite |
+
+AWS credentials are entered in the **Credentials** tab of the GUI and stored base64-encoded at `~/.config/AwsBoxAutomation/credentials.json`.
 
 ## Formatters and linters
 
@@ -114,17 +116,17 @@ ansible-inventory --graph
 ansible-inventory --list
 
 # Check hosts
-ansible name_guest_box -m ping
-ansible name_guest_box -m command -a uptime
-ansible name_guest_box -m command -a "tail /var/log/dmesg"
-ansible name_guest_box -b -K -a "tail /var/log/syslog"
-ansible name_guest_box -b -K -m package -a 'name=nginx update_cache=true'
-ansible name_guest_box -m setup
-ansible name_guest_box -m setup -a 'filter=ansible_all_ipv6_addresses'
+ansible name_dtc_box -m ping
+ansible name_dtc_box -m command -a uptime
+ansible name_dtc_box -m command -a "tail /var/log/dmesg"
+ansible name_dtc_box -b -K -a "tail /var/log/messages"
+ansible name_dtc_box -b -K -m package -a 'name=nginx update_cache=true'
+ansible name_dtc_box -m setup
+ansible name_dtc_box -m setup -a 'filter=ansible_all_ipv6_addresses'
 
 # Documentation helpers
 ansible-doc service
-ansible-doc -l | grep ^apt
+ansible-doc -l | grep ^amazon
 ansible-doc -t inventory amazon.aws.aws_ec2
 
 # Validation
@@ -138,74 +140,41 @@ ansible-playbook -b -K -vvv playbooks/postgresql.yml
 ansible-playbook -b -K -vvv playbooks/nginx.yml
 ```
 
-
 ## AWS credentials
 
-Run `aws configure` to set up your credentials:
-
-`aws configure` is an interactive wizard that prompts for four values:
-
-```
-AWS Access Key ID [None]: AKIAIOSFODNN7EXAMPLE
-AWS Secret Access Key [None]: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-Default region name [None]: eu-west-1
-Default output format [None]: json
-```
-
-| Prompt | What to enter |
-|---|---|
-| **Access Key ID** | From AWS Console → IAM → Users → Security credentials → Create access key |
-| **Secret Access Key** | Shown once at creation time — copy it before closing the dialog |
-| **Region** | The AWS region you target (e.g. `eu-west-1`, `us-east-1`) |
-| **Output format** | `json`, `yaml`, `text`, or `table` — `json` is the default |
-
-The wizard writes two files:
-
-```ini
-# ~/.aws/credentials
-[default]
-aws_access_key_id = AKIAIOSFODNN7EXAMPLE
-aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/...
-
-# ~/.aws/config
-[default]
-region = eu-west-1
-output = json
-```
-
-To configure additional named profiles (e.g. for separate staging and prod accounts):
+The scripts require three environment variables. Export them before running any `bin/` script directly:
 
 ```bash
-aws configure --profile staging
-aws configure --profile prod
+export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+export AWS_DEFAULT_REGION=eu-west-1
 ```
 
-Use a profile with `--profile <name>` or by setting `export AWS_PROFILE=staging`.
+When using the GUI these are configured in the **Credentials** tab and passed to the scripts automatically.
+
+To create the credentials, log into the AWS Console → IAM → Users → select the user → Security credentials → Create access key. Associate the user with `AmazonEC2FullAccess` and `AmazonRoute53FullAccess`.
 
 The AWS SDK (`boto3`) and the `amazon.aws` Ansible collection resolve credentials in this order:
 
 1. Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`)
 2. `~/.aws/credentials` file (set by `aws configure`)
 3. IAM instance role (when running on an EC2 instance)
+
 ## Verify the environment
 
 ```bash
+source .venv/bin/activate
 python -m pip check
 python -c "import com.maxmin.aws; print('imports ok')"
 pytest -q
 ```
 
-## Recommended housekeeping
+## Configure Visual Studio Code
 
-- Add `.venv/` to `.gitignore`
-- Add a `.env.sample` file for non-secret environment variable names
-- Keep runtime and development dependencies separate: `requirements.txt` for runtime and `requirements-dev.txt` for development
-
-## Configure Visual Studio Code for development
-
-Create a `.vscode/settings.json` file in the repository root with at least the following settings:
+The bootstrap script creates `.vscode/settings.json` and `.vscode/extensions.json` automatically. To configure manually:
 
 ```json
+// .vscode/settings.json
 {
   "files.restoreUndoStack": false,
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
@@ -217,62 +186,18 @@ Create a `.vscode/settings.json` file in the repository root with at least the f
 }
 ```
 
-### Recommended extensions
-
-Create a `.vscode/extensions.json` file to recommend helpful extensions for this workspace:
-
-```json
-{
-  "recommendations": [
-    "ms-python.python",
-    "ms-python.vscode-pylance",
-    "ms-python.flake8",
-    "ms-python.black-formatter",
-    "redhat.ansible",
-    "GoogleCloudTools.cloudcode"
-  ]
-}
-```
-
-| Extension | Publisher | Purpose |
-|---|---|---|
-| `ms-python.python` | Microsoft | Core Python support: IntelliSense, debugging, test runner integration, and virtual environment management |
-| `ms-python.vscode-pylance` | Microsoft | Fast, type-aware language server built on Pyright — provides rich auto-complete, type checking, and import resolution |
-| `ms-python.flake8` | Microsoft | Flake8 linter integration — replaces the deprecated `python.linting.flake8Enabled` setting |
-| `ms-python.black-formatter` | Microsoft | Black formatter integration — replaces the deprecated `python.formatting.provider` setting |
-| `redhat.ansible` | Red Hat | Ansible language support: syntax highlighting, auto-complete, and linting via `ansible-lint` |
-| `GoogleCloudTools.cloudcode` | Google Cloud | Tools for working with Google Cloud services, Kubernetes, and Cloud Run directly from VS Code |
-
-### Install extensions
-
-1. Open VS Code and open the Extensions view with `Ctrl+Shift+X`.
-2. Search for `Cloud Code` and install the extension published by `GoogleCloudTools`.
-3. Search for `Claude Code` and install the extension published by `Anthropic` (extension ID: `anthropic.claude-code`).
-
-Alternatively, open the Command Palette with `Ctrl+Shift+P`, type `Extensions: Install Extensions`, and enter the extension ID.
-
-### Configure Claude Code
-
-Claude Code is Anthropic's AI coding assistant. After installing the extension:
-
-1. Open the Command Palette with `Ctrl+Shift+P` and run **Claude Code: Sign In**.
-2. Complete the browser authentication flow with your Anthropic account.
-3. Once authenticated the Claude Code icon appears in the Activity Bar.
-
-| Action | Shortcut |
+| Extension | Purpose |
 |---|---|
-| Open Claude Code panel | `Ctrl+Shift+C` |
-| Inline code fix | `Ctrl+.` then select Claude Code |
-| Accept suggestion | `Tab` |
-| Dismiss suggestion | `Esc` |
-
-> Claude Code requires an Anthropic account. Usage is billed per token — see [claude.ai/code](https://claude.ai/code) for pricing and plan details.
-
-When VS Code is running, reload the window after updating `.vscode/settings.json` or `.vscode/extensions.json` so the new workspace settings take effect.
+| `ms-python.python` | Core Python support: IntelliSense, debugging, virtual environment management |
+| `ms-python.vscode-pylance` | Type-aware language server — auto-complete, type checking, import resolution |
+| `ms-python.flake8` | Flake8 linter integration |
+| `ms-python.black-formatter` | Black formatter integration |
+| `redhat.ansible` | Ansible syntax highlighting, auto-complete, `ansible-lint` |
+| `GoogleCloudTools.cloudcode` | Cloud services and Kubernetes tooling |
 
 ## Optional automation
 
-Run the bootstrap script to automate this setup:
+Run the bootstrap script to automate the full setup:
 
 ```bash
 scripts/bootstrap-fedora.sh
