@@ -64,7 +64,7 @@ pip install -r requirements-dev.txt
 > Each new shell starts with no venv active — re-run `source .venv/bin/activate` every time you open a new terminal.
 
 | Layer | Key packages |
-|---|---|
+| --- | --- |
 | **Runtime** (`requirements.txt`) | `ansible` + `ansible-core`, `boto3` / `botocore` (AWS SDK), `moto` (AWS mocking), `docker`, `Jinja2`, `cryptography` |
 | **Development** (`requirements-dev.txt`) | `pytest`, `pytest-cov`, `pytest-mock`, `moto`, `black`, `flake8`, `pycodestyle`, `cfn-lint` |
 
@@ -77,16 +77,28 @@ The `app/` directory contains an Electron + React desktop GUI for running Make, 
 ```bash
 cd app
 npm install
-npm run dev      # starts Vite dev server + Electron with hot reload
+npm start        # builds with Vite then launches Electron
 ```
 
-> **Linux note:** VSCode sets `ELECTRON_RUN_AS_NODE=1` in its environment, which causes `require('electron')` to return a path string instead of the Electron module. The `dev` and `start` npm scripts call `env -u ELECTRON_RUN_AS_NODE electron .` to unset it before launching. If you run electron directly, unset the variable first: `env -u ELECTRON_RUN_AS_NODE electron .`
+> **Linux note:** VSCode sets `ELECTRON_RUN_AS_NODE=1` in its environment, which causes `require('electron')` to return a path string instead of the Electron module. The `start` npm script calls `env -u ELECTRON_RUN_AS_NODE electron .` to unset it before launching. If you run electron directly, unset the variable first: `env -u ELECTRON_RUN_AS_NODE electron .`
 
 | Command | What it does |
-|---|---|
-| `npm run dev` | Starts Vite dev server + Electron with hot reload |
-| `npm start` | Production build then launches Electron |
+| --- | --- |
+| `npm start` | Builds with Vite then launches Electron |
 | `npm test` | Runs Vitest test suite |
+
+| Package | Purpose |
+| --- | --- |
+| `electron` | Desktop shell — wraps the React UI in a native window |
+| `react` / `react-dom` | UI component library |
+| `vite` / `@vitejs/plugin-react` | Bundler and dev build tool |
+| `typescript` | Type checking |
+| `tailwindcss` / `autoprefixer` / `postcss` | Utility-first CSS |
+| `@tailwindcss/typography` | Prose typography styles |
+| `cross-env` | Cross-platform env var setting for the `start` script |
+| `vitest` | Test runner |
+| `@testing-library/react` / `jest-dom` / `user-event` | React component testing utilities |
+| `jsdom` | DOM environment for Vitest |
 
 AWS credentials are entered in the **Credentials** tab of the GUI and stored base64-encoded at `~/.config/AwsBoxAutomation/credentials.json`.
 
@@ -187,7 +199,7 @@ The bootstrap script creates `.vscode/settings.json` and `.vscode/extensions.jso
 ```
 
 | Extension | Purpose |
-|---|---|
+| --- | --- |
 | `ms-python.python` | Core Python support: IntelliSense, debugging, virtual environment management |
 | `ms-python.vscode-pylance` | Type-aware language server — auto-complete, type checking, import resolution |
 | `ms-python.flake8` | Flake8 linter integration |
