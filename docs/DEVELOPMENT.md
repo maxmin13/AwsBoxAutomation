@@ -61,13 +61,13 @@ pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
 
-> Each new shell starts with no venv active — re-run `source .venv/bin/activate` every time you open a new terminal.
-
 | Layer | Key packages |
 | --- | --- |
 | **Runtime** (`requirements.txt`) | `ansible` + `ansible-core`, `boto3` / `botocore` (AWS SDK), `moto` (AWS mocking), `docker`, `Jinja2`, `cryptography` |
 | **Development** (`requirements-dev.txt`) | `pytest`, `pytest-cov`, `pytest-mock`, `moto`, `black`, `flake8`, `pycodestyle`, `cfn-lint` |
 
+> Each new shell starts with no venv active — re-run `source .venv/bin/activate` every time you open a new terminal.
+>
 > `awscli` is the only AWS-related tool installed system-wide. The AWS SDK (`boto3`) and Ansible's `amazon.aws` collection are installed inside the venv so their versions are pinned and isolated.
 
 ## Electron GUI
@@ -77,15 +77,7 @@ The `app/` directory contains an Electron + React desktop GUI for running Make, 
 ```bash
 cd app
 npm install
-npm start        # builds with Vite then launches Electron
 ```
-
-> **Linux note:** VSCode sets `ELECTRON_RUN_AS_NODE=1` in its environment, which causes `require('electron')` to return a path string instead of the Electron module. The `start` npm script calls `env -u ELECTRON_RUN_AS_NODE electron .` to unset it before launching. If you run electron directly, unset the variable first: `env -u ELECTRON_RUN_AS_NODE electron .`
-
-| Command | What it does |
-| --- | --- |
-| `npm start` | Builds with Vite then launches Electron |
-| `npm test` | Runs Vitest test suite |
 
 | Package | Purpose |
 | --- | --- |
@@ -99,6 +91,17 @@ npm start        # builds with Vite then launches Electron
 | `vitest` | Test runner |
 | `@testing-library/react` / `jest-dom` / `user-event` | React component testing utilities |
 | `jsdom` | DOM environment for Vitest |
+
+```bash
+npm start        # builds with Vite then launches Electron
+```
+
+> **Linux note:** VSCode sets `ELECTRON_RUN_AS_NODE=1` in its environment, which causes `require('electron')` to return a path string instead of the Electron module. The `start` npm script calls `env -u ELECTRON_RUN_AS_NODE electron .` to unset it before launching. If you run electron directly, unset the variable first: `env -u ELECTRON_RUN_AS_NODE electron .`
+
+| Command | What it does |
+| --- | --- |
+| `npm start` | Builds with Vite then launches Electron |
+| `npm test` | Runs Vitest test suite |
 
 AWS credentials are entered in the **Credentials** tab of the GUI and stored base64-encoded at `~/.config/AwsBoxAutomation/credentials.json`.
 
