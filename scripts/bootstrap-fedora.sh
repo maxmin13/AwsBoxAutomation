@@ -2,14 +2,15 @@
 # Bootstraps a Fedora development environment for AwsBoxAutomation.
 #
 # What it does:
-#   1. Updates system packages and installs build tools, Python 3, and awscli
+#   1. Updates system packages and installs build tools, Python 3, Node.js, and awscli
 #   2. Generates an SSH key for GitHub access (if not present)
 #   3. Creates (or upgrades) a Python virtual environment at .venv/
 #   4. Adds .venv/ to .gitignore (if not already present)
 #   5. Installs runtime and development dependencies from requirements*.txt
-#   6. Creates .vscode/settings.json and .vscode/extensions.json (if not present)
-#   7. Installs recommended VS Code extensions (if 'code' CLI is available)
-#   8. Verifies the environment with pip check
+#   6. Installs Electron GUI dependencies (app/node_modules/)
+#   7. Creates .vscode/settings.json and .vscode/extensions.json (if not present)
+#   8. Installs recommended VS Code extensions (if 'code' CLI is available)
+#   9. Verifies the environment with pip check
 #
 # After running this script:
 #   - If a new SSH key was generated, add the displayed public key to GitHub:
@@ -27,7 +28,8 @@ echo "Setting up Fedora development environment for AwsBoxAutomation..."
 # --- System packages ---
 readonly SYSTEM_PACKAGES=(
   git python3.12 python3.12-devel
-  gcc gcc-c++ libffi-devel openssl-devel make redhat-rpm-config awscli
+  gcc gcc-c++ libffi-devel openssl-devel make redhat-rpm-config
+  awscli nodejs npm
 )
 
 echo "Installing system packages..."
@@ -68,6 +70,10 @@ python -m pip install --upgrade pip setuptools wheel
 echo "Installing Python dependencies..."
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
+
+# --- Electron GUI dependencies ---
+echo "Installing Electron GUI dependencies..."
+npm install --prefix app
 
 # --- VS Code workspace settings ---
 echo "Creating VS Code workspace settings..."
