@@ -41,9 +41,9 @@ export DATACENTER_DIR
 DATACENTER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd ../.. && pwd)"
 
 export PYTHONPATH
-PYTHONPATH="${DATACENTER_DIR}"/project/src:"${DATACENTER_DIR}"/project/tests/src
+PYTHONPATH="${DATACENTER_DIR}"/vm/datacenter/src:"${DATACENTER_DIR}"/vm/datacenter/tests/src
 
 source "${DATACENTER_DIR}"/.venv/bin/activate
 
-cd "${DATACENTER_DIR}"/project/tests/src
+cd "${DATACENTER_DIR}"/vm/datacenter/tests/src
 pytest -s

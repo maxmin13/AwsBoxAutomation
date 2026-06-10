@@ -38,11 +38,11 @@ class Ec2Constants(IniFileConstants):
 class ProjectDirectories:
     # Prefer repository-relative paths, fall back to DATACENTER_DIR if set
     REPO_ROOT = project_subdir(".").parent
-    ACCESS_DIR = project_subdir("access")
-    CONFIG_DIR = project_subdir("config")
-    TEMPLATES_DIR = project_subdir("project", "templates")
-    CONSTANTS_DIR = project_subdir("project", "constants")
-    TEST_DIR = project_subdir("project", "tests")
+    ACCESS_DIR = project_subdir("vm", "access")
+    CONFIG_DIR = project_subdir("vm", "config")
+    TEMPLATES_DIR = project_subdir("vm", "datacenter", "templates")
+    CONSTANTS_DIR = project_subdir("vm", "datacenter", "constants")
+    TEST_DIR = project_subdir("vm", "datacenter", "tests")
 
 
 class ProjectFiles:

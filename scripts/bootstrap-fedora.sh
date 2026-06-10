@@ -68,8 +68,8 @@ source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 
 echo "Installing Python dependencies..."
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+pip install -r vm/requirements.txt
+pip install -r vm/requirements-dev.txt
 
 # --- Electron GUI dependencies ---
 echo "Installing Electron GUI dependencies..."
