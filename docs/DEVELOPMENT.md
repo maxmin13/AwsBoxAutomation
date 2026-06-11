@@ -57,8 +57,8 @@ cd AwsBoxAutomation
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+pip install -r vm/requirements.txt
+pip install -r vm/requirements-dev.txt
 ```
 
 | Layer | Key packages |
@@ -86,7 +86,11 @@ npm install
 | `vite` / `@vitejs/plugin-react` | Bundler and dev build tool |
 | `typescript` | Type checking |
 | `tailwindcss` / `autoprefixer` / `postcss` | Utility-first CSS |
-| `@tailwindcss/typography` | Prose typography styles |
+| `@tailwindcss/typography` | Prose typography styles for the Docs page |
+| `react-markdown` / `remark-gfm` | Markdown rendering with GitHub Flavored Markdown support |
+| `@aws-sdk/client-iam` | IAM user and policy management |
+| `@aws-sdk/client-budgets` | AWS Budgets — create monthly spend alerts |
+| `@aws-sdk/client-sts` | STS — resolve caller account ID |
 | `cross-env` | Cross-platform env var setting for the `start` script |
 | `vitest` | Test runner |
 | `@testing-library/react` / `jest-dom` / `user-event` | React component testing utilities |
@@ -123,7 +127,7 @@ black --line-length=79 .
 
 ```bash
 source .venv/bin/activate
-cd provision
+cd vm/provision
 
 # Inventory and configuration
 ansible-config list | grep python
@@ -167,7 +171,7 @@ export AWS_DEFAULT_REGION=eu-west-1
 
 When using the GUI these are configured in the **Credentials** tab and passed to the scripts automatically.
 
-To create the credentials, log into the AWS Console → IAM → Users → select the user → Security credentials → Create access key. Associate the user with `AmazonEC2FullAccess` and `AmazonRoute53FullAccess`.
+To create an IAM user and access key, use the **My Account → Account Setup → Create IAM User** section in the GUI. Alternatively, log into the AWS Console → IAM → Users → select the user → Security credentials → Create access key.
 
 The AWS SDK (`boto3`) and the `amazon.aws` Ansible collection resolve credentials in this order:
 

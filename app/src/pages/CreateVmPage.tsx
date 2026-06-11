@@ -1,4 +1,8 @@
+import { useAuth } from '../AuthContext'
+
 export default function CreateVmPage() {
+  const { requireCreds, withAuth } = useAuth()
+
   const config = [
     { label: 'Instance name',   value: 'dtc-box'                             },
     { label: 'AMI',             value: 'Amazon Linux 2 (amzn2 kernel 5.10)'  },
@@ -37,6 +41,7 @@ export default function CreateVmPage() {
       </div>
 
       <button
+        onClick={() => requireCreds(() => withAuth(() => { /* TODO: trigger VM creation */ }))}
         className="px-4 py-2 text-sm bg-blue-700 hover:bg-blue-600 text-white font-medium rounded transition-colors"
       >
         Create VM

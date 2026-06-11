@@ -12,12 +12,16 @@ export default function LoginPage({ onNext, onBack }: LoginPageProps) {
   const [showSecret,      setShowSecret]      = useState(false)
   const [saving,          setSaving]          = useState(false)
   const [error,           setError]           = useState<string | null>(null)
+  const [noKeychain,      setNoKeychain]      = useState(false)
 
   useEffect(() => {
     window.electronAPI.loadCredentials().then((saved) => {
       if (saved.accessKeyId)     setAccessKeyId(saved.accessKeyId)
       if (saved.secretAccessKey) setSecretAccessKey(saved.secretAccessKey)
       if (saved.region)          setRegion(saved.region)
+    })
+    window.electronAPI.encryptionAvailable().then(({ ok }) => {
+      if (!ok) setNoKeychain(true)
     })
   }, [])
 
@@ -56,6 +60,12 @@ export default function LoginPage({ onNext, onBack }: LoginPageProps) {
 
       <h1 className="text-2xl font-semibold text-zinc-100 mb-1">AWS Credentials</h1>
       <p className="text-zinc-400 text-sm mb-4">Enter your AWS credentials to continue.</p>
+
+      {noKeychain && (
+        <div className="mb-4 px-3 py-2 bg-amber-900/40 border border-amber-700 rounded text-amber-300 text-xs">
+          OS keychain unavailable — credentials will be stored with restricted permissions but without encryption. Install a keychain service (e.g. <span className="font-mono">gnome-keyring</span> or <span className="font-mono">kwallet</span>) to enable encryption at rest.
+        </div>
+      )}
 
       <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-5 space-y-3">
 

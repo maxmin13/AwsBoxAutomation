@@ -9,8 +9,8 @@ const NAV_ITEMS: { page: Page; label: string }[] = [
   { page: 'account',     label: 'My Account' },
   { page: 'vms',         label: 'My VMs'     },
   { page: 'create',      label: 'Create VM'  },
-  { page: 'docs',        label: 'Docs'       },
   { page: 'logs',        label: 'Console'    },
+  { page: 'docs',        label: 'Docs'       },
 ]
 
 export default function NavBar({ currentPage, onNavigate }: NavBarProps) {

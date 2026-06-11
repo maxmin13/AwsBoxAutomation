@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
 import type { InstanceInfo } from '../electron.d'
-import LoginPage from './LoginPage'
 import ProvisionPage from './ProvisionPage'
+import { useAuth } from '../AuthContext'
 
-type View = null | 'login-provision' | 'login-detail' | 'provision' | 'detail'
+type View = null | 'provision' | 'detail'
 
 export default function DatacenterPage() {
+  const { requireCreds, withAuth } = useAuth()
   const [view, setView] = useState<View>(null)
   const [info, setInfo] = useState<InstanceInfo | null>(null)
 
@@ -23,8 +24,6 @@ export default function DatacenterPage() {
     }
   }
 
-  if (view === 'login-provision') return <LoginPage onBack={() => setView(null)} onNext={() => setView('provision')} />
-  if (view === 'login-detail')    return <LoginPage onBack={() => setView(null)} onNext={() => setView('detail')} />
   if (view === 'provision') return <ProvisionPage onBack={() => setView(null)} />
   if (view === 'detail') return <DetailPage info={info ?? { found: false }} onBack={() => setView(null)} />
 
@@ -47,7 +46,12 @@ export default function DatacenterPage() {
       {info === null ? (
         <div className="text-zinc-500 text-sm">Loading datacenter status...</div>
       ) : (
-        <InstanceCard info={info} onProvision={() => setView('login-provision')} onDetail={() => setView('login-detail')} onRefresh={loadStatus} />
+        <InstanceCard
+          info={info}
+          onProvision={() => requireCreds(() => withAuth(() => setView('provision')))}
+          onDetail={() => requireCreds(() => withAuth(() => setView('detail')))}
+          onRefresh={loadStatus}
+        />
       )}
 
     </div>
@@ -64,6 +68,7 @@ interface InstanceCardProps {
 }
 
 function InstanceCard({ info, onProvision, onDetail, onRefresh }: InstanceCardProps) {
+  const { requireCreds, withAuth } = useAuth()
   const [busy,     setBusy]     = useState(false)
   const [starting, setStarting] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -147,7 +152,7 @@ function InstanceCard({ info, onProvision, onDetail, onRefresh }: InstanceCardPr
           {/* Start / Stop — mutually exclusive */}
           {isRunning || inTransit ? (
             <button
-              onClick={() => setShowStopModal(true)}
+              onClick={() => requireCreds(() => withAuth(() => setShowStopModal(true)))}
               disabled={busy || inTransit}
               className="px-3 py-1 text-sm bg-red-700 hover:bg-red-600 text-white font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -155,7 +160,7 @@ function InstanceCard({ info, onProvision, onDetail, onRefresh }: InstanceCardPr
             </button>
           ) : (
             <button
-              onClick={handleStart}
+              onClick={() => requireCreds(() => withAuth(handleStart))}
               disabled={busy || !info.found || (!isStopped && !inTransit)}
               className="px-3 py-1 text-sm bg-blue-700 hover:bg-blue-600 text-white font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -164,7 +169,7 @@ function InstanceCard({ info, onProvision, onDetail, onRefresh }: InstanceCardPr
           )}
 
           <button
-            onClick={() => setShowDeleteModal(true)}
+            onClick={() => requireCreds(() => withAuth(() => setShowDeleteModal(true)))}
             disabled={busy || isRunning || inTransit}
             className="px-3 py-1 text-sm border border-zinc-600 hover:border-zinc-400 text-zinc-400 hover:text-zinc-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -182,7 +187,6 @@ function InstanceCard({ info, onProvision, onDetail, onRefresh }: InstanceCardPr
           <button
             onClick={onDetail}
             disabled={busy}
-
             className="px-3 py-1 text-sm border border-zinc-600 hover:border-zinc-400 text-zinc-400 hover:text-zinc-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Detail
