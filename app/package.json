@@ -63,9 +63,11 @@
     "@aws-sdk/client-budgets": "^3.1065.0",
     "@aws-sdk/client-cost-explorer": "^3.1065.0",
     "@aws-sdk/client-ec2": "^3.1065.0",
+    "@aws-sdk/client-eventbridge": "^3.1068.0",
     "@aws-sdk/client-guardduty": "^3.1065.0",
     "@aws-sdk/client-iam": "^3.1065.0",
     "@aws-sdk/client-s3-control": "^3.1065.0",
+    "@aws-sdk/client-sns": "^3.1068.0",
     "@aws-sdk/client-sts": "^3.1065.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1"

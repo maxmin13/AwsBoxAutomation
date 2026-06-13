@@ -44,7 +44,9 @@ export default function DatacenterPage() {
 
       {/* Instance card */}
       {info === null ? (
-        <div className="text-zinc-500 text-sm">Loading datacenter status...</div>
+        <div className="text-zinc-500 text-sm">Loading...</div>
+      ) : !info.found ? (
+        <div className="text-zinc-500 text-sm">No VMs found. Use the <span className="text-zinc-300">Create VM</span> tab to provision one.</div>
       ) : (
         <InstanceCard
           info={info}
