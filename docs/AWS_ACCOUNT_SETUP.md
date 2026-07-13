@@ -28,7 +28,9 @@ The account is active within minutes.
 
 The application needs credentials to connect to AWS for the first time. On a brand new account, root access keys are the only option.
 
-> Root access keys are temporary — the app deletes them automatically after creating an IAM user. Deleting them only removes programmatic API access; you can still sign in to the AWS console as root with your email and password at any time.
+Root has two independent authentication mechanisms: **access keys** (an Access Key ID + Secret Access Key pair, used for programmatic API calls) and **console login** (your root email + password, optionally + MFA). Deleting one has no effect on the other.
+
+> Root access keys are temporary — the app deletes them automatically once an IAM user exists, since a long-lived root key is a much bigger risk if leaked than an IAM user's key. Deleting them only removes programmatic API access; you can still sign in to the AWS console as root with your email and password at any time.
 
 1. Sign in to the AWS Console as root
 2. Top-right menu → **Security credentials**
