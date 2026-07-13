@@ -38,17 +38,25 @@ declare global {
       startInstance:      (instanceId: string) => Promise<{ ok: boolean; error?: string }>
       stopInstance:       (instanceId: string) => Promise<{ ok: boolean; error?: string }>
 
-      createIamUser:          (username: string) => Promise<{ ok: boolean; error?: string; accessKeyId?: string; secretAccessKey?: string }>
-      createBillingAlert:     (amount: number, email: string) => Promise<{ ok: boolean; error?: string }>
+      createIamUser:          (username: string, policyArn: string, deleteRootKeys?: boolean) => Promise<{ ok: boolean; error?: string; accessKeyId?: string; secretAccessKey?: string; rootKeysDeleted?: boolean }>
+      createBillingAlert:     (amount: number, email: string, phone?: string) => Promise<{ ok: boolean; error?: string }>
       setIamPasswordPolicy:   () => Promise<{ ok: boolean; error?: string }>
       blockS3PublicAccess:    () => Promise<{ ok: boolean; error?: string }>
       enableGuardDuty:        () => Promise<{ ok: boolean; error?: string }>
       enableAccessAnalyzer:   () => Promise<{ ok: boolean; error?: string }>
-      createAnomalyDetection: (threshold: number, email: string) => Promise<{ ok: boolean; error?: string }>
+      createAnomalyDetection:  (threshold: number, email: string, phone?: string) => Promise<{ ok: boolean; error?: string }>
+      enableSmsSecurityAlert:  (phone: string) => Promise<{ ok: boolean; error?: string }>
 
-      readLog:    () => Promise<{ ok: boolean; content?: string }>
-      openLogDir: () => Promise<{ ok: boolean; error?: string }>
-      logError:   (message: string, stack: string) => Promise<void>
+      checkRootCredentials:   () => Promise<{ ok: boolean; error?: string; keysPresent?: boolean; mfaEnabled?: boolean; accountId?: string; isRoot?: boolean }>
+      deleteRootAccessKeys:   () => Promise<{ ok: boolean; error?: string }>
+      createVirtualMfaDevice: () => Promise<{ ok: boolean; error?: string; serialNumber?: string; qrCodePng?: string; base32Seed?: string }>
+      enableMfaDevice:        (serialNumber: string, authCode1: string, authCode2: string) => Promise<{ ok: boolean; error?: string }>
+      createRootLoginAlarm:   (email: string, phone?: string) => Promise<{ ok: boolean; error?: string }>
+
+      readLog:      () => Promise<{ ok: boolean; content?: string }>
+      openLogDir:   () => Promise<{ ok: boolean; error?: string }>
+      openExternal: (url: string) => Promise<{ ok: boolean; error?: string }>
+      logError:     (message: string, stack: string) => Promise<void>
     }
   }
 }

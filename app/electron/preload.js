@@ -27,11 +27,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('stop-instance', instanceId),
 
   // ── AWS account setup ─────────────────────────────────────
-  createIamUser: (username) =>
-    ipcRenderer.invoke('create-iam-user', username),
+  createIamUser: (username, policyArn, deleteRootKeys) =>
+    ipcRenderer.invoke('create-iam-user', { username, policyArn, deleteRootKeys }),
 
-  createBillingAlert: (amount, email) =>
-    ipcRenderer.invoke('create-billing-alert', { amount, email }),
+  createBillingAlert: (amount, email, phone) =>
+    ipcRenderer.invoke('create-billing-alert', { amount, email, phone }),
 
   setIamPasswordPolicy: () =>
     ipcRenderer.invoke('set-iam-password-policy'),
@@ -45,13 +45,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
   enableAccessAnalyzer: () =>
     ipcRenderer.invoke('enable-access-analyzer'),
 
-  createAnomalyDetection: (threshold, email) =>
-    ipcRenderer.invoke('create-anomaly-detection', { threshold, email }),
+  createAnomalyDetection: (threshold, email, phone) =>
+    ipcRenderer.invoke('create-anomaly-detection', { threshold, email, phone }),
+
+  enableSmsSecurityAlert: (phone) =>
+    ipcRenderer.invoke('enable-sms-security-alert', { phone }),
+
+  // ── Root security ─────────────────────────────────────────
+  checkRootCredentials: () =>
+    ipcRenderer.invoke('check-root-credentials'),
+
+  deleteRootAccessKeys: () =>
+    ipcRenderer.invoke('delete-root-access-keys'),
+
+  createVirtualMfaDevice: () =>
+    ipcRenderer.invoke('create-virtual-mfa-device'),
+
+  enableMfaDevice: (serialNumber, authCode1, authCode2) =>
+    ipcRenderer.invoke('enable-mfa-device', { serialNumber, authCode1, authCode2 }),
+
+  createRootLoginAlarm: (email, phone) =>
+    ipcRenderer.invoke('create-root-login-alarm', { email, phone }),
 
   // ── Log viewer ────────────────────────────────────────────
   readLog: () => ipcRenderer.invoke('read-log'),
 
-  openLogDir: () => ipcRenderer.invoke('open-log-dir'),
+  openLogDir:   () => ipcRenderer.invoke('open-log-dir'),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
 
   // ── Error logging ─────────────────────────────────────────
   logError: (message, stack) => ipcRenderer.invoke('log-error', message, stack),

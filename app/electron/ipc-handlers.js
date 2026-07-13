@@ -57,6 +57,58 @@ function handleIpc(channel, handler) {
   })
 }
 
+// ── Shared alert-topic helpers ───────────────────────────────────────────────
+// The billing, anomaly, GuardDuty SMS, and root-login-alarm handlers all create
+// an SNS topic with the same publish-policy/subscribe shape, and the two
+// EventBridge-based ones (GuardDuty SMS, root login alarm) put an identically
+// shaped rule + target. Factored out here so the four handlers stay one-liners.
+
+async function createAlertTopic(snsClient, { name, principal, email, phone }) {
+  const { CreateTopicCommand, SetTopicAttributesCommand, SubscribeCommand } = require('@aws-sdk/client-sns')
+  const { TopicArn } = await snsClient.send(new CreateTopicCommand({ Name: name }))
+  await snsClient.send(new SetTopicAttributesCommand({
+    TopicArn,
+    AttributeName:  'Policy',
+    AttributeValue: JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [{ Effect: 'Allow', Principal: { Service: principal }, Action: 'SNS:Publish', Resource: TopicArn }],
+    }),
+  }))
+  if (email) await snsClient.send(new SubscribeCommand({ TopicArn, Protocol: 'email', Endpoint: email }))
+  if (phone) await snsClient.send(new SubscribeCommand({ TopicArn, Protocol: 'sms', Endpoint: phone }))
+  return TopicArn
+}
+
+async function putAlertRule(ebClient, { name, description, eventPattern, targetArn, inputPathsMap, inputTemplate }) {
+  const { PutRuleCommand, PutTargetsCommand } = require('@aws-sdk/client-eventbridge')
+  await ebClient.send(new PutRuleCommand({
+    Name: name, Description: description, State: 'ENABLED', EventPattern: JSON.stringify(eventPattern),
+  }))
+  await ebClient.send(new PutTargetsCommand({
+    Rule:    name,
+    Targets: [{ Id: `${name}-target`, Arn: targetArn, InputTransformer: { InputPathsMap: inputPathsMap, InputTemplate: inputTemplate } }],
+  }))
+}
+
+// Deletes all access keys belonging to `creds`, but only after confirming via
+// STS that those credentials actually belong to the root user. Shared by
+// create-iam-user's "delete root keys" option and the standalone
+// delete-root-access-keys handler so the safety check can't drift between them.
+async function deleteAccessKeysIfRoot(client, creds) {
+  const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts')
+  const { ListAccessKeysCommand, DeleteAccessKeyCommand } = require('@aws-sdk/client-iam')
+
+  const identity = await new STSClient({ region: 'us-east-1', credentials: creds })
+    .send(new GetCallerIdentityCommand({}))
+  if (!identity.Arn?.endsWith(':root')) return false
+
+  const { AccessKeyMetadata = [] } = await client.send(new ListAccessKeysCommand({}))
+  for (const key of AccessKeyMetadata) {
+    await client.send(new DeleteAccessKeyCommand({ AccessKeyId: key.AccessKeyId }))
+  }
+  return true
+}
+
 /**
  * Registers all IPC handlers. Called once from main.js after the window is created.
  * @param {Electron.BrowserWindow} win
@@ -187,10 +239,12 @@ function registerIpcHandlers(win) {
   })
 
   // ── IAM user creation ────────────────────────────────────────────────────
-  // Creates an IAM user, attaches AdministratorAccess, and returns a new access key.
-  // Credentials are only returned once — the caller must save them immediately.
+  // Creates an IAM user, attaches the chosen policy, and returns a new access key.
+  // If deleteRootKeys is true, root access keys are deleted before returning — this
+  // is safe here because the credential store still holds root credentials at call time.
+  // A safety check ensures we only delete keys when the caller is actually root.
 
-  handleIpc('create-iam-user', async (_event, username) => {
+  handleIpc('create-iam-user', async (_event, { username, policyArn, deleteRootKeys }) => {
     const store = await readCredsStore()
     if (!store.accessKeyId || !store.secretAccessKey) {
       return { ok: false, error: 'No credentials configured. Save your AWS credentials first.' }
@@ -203,22 +257,21 @@ function registerIpcHandlers(win) {
         CreateAccessKeyCommand,
       } = require('@aws-sdk/client-iam')
 
-      const client = new IAMClient({
-        region: 'us-east-1',
-        credentials: { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey },
-      })
+      const creds  = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+      const client = new IAMClient({ region: 'us-east-1', credentials: creds })
 
       await client.send(new CreateUserCommand({ UserName: username }))
-
-      await client.send(new AttachUserPolicyCommand({
-        UserName: username,
-        PolicyArn: 'arn:aws:iam::aws:policy/AdministratorAccess',
-      }))
+      await client.send(new AttachUserPolicyCommand({ UserName: username, PolicyArn: policyArn }))
 
       const keyResponse = await client.send(new CreateAccessKeyCommand({ UserName: username }))
       const key = keyResponse.AccessKey
 
-      return { ok: true, accessKeyId: key.AccessKeyId, secretAccessKey: key.SecretAccessKey }
+      let rootKeysDeleted = false
+      if (deleteRootKeys) {
+        rootKeysDeleted = await deleteAccessKeysIfRoot(client, creds)
+      }
+
+      return { ok: true, accessKeyId: key.AccessKeyId, secretAccessKey: key.SecretAccessKey, rootKeysDeleted }
     } catch (error) {
       log.error('[ipc][create-iam-user]', error.message)
       return { ok: false, error: error.message }
@@ -228,7 +281,7 @@ function registerIpcHandlers(win) {
   // ── Billing alert ─────────────────────────────────────────────────────────
   // Creates a monthly AWS Budget and sends an email alert when 80% is reached.
 
-  handleIpc('create-billing-alert', async (_event, { amount, email }) => {
+  handleIpc('create-billing-alert', async (_event, { amount, email, phone }) => {
     const store = await readCredsStore()
     if (!store.accessKeyId || !store.secretAccessKey) {
       return { ok: false, error: 'No credentials configured. Save your AWS credentials first.' }
@@ -241,6 +294,15 @@ function registerIpcHandlers(win) {
 
       const identity = await new STSClient({ region: 'us-east-1', credentials: creds })
         .send(new GetCallerIdentityCommand({}))
+
+      const subscribers = [{ SubscriptionType: 'EMAIL', Address: email }]
+
+      if (phone) {
+        const { SNSClient } = require('@aws-sdk/client-sns')
+        const snsClient = new SNSClient({ region: 'us-east-1', credentials: creds })
+        const TopicArn = await createAlertTopic(snsClient, { name: 'billing-sms-alerts', principal: 'budgets.amazonaws.com', phone })
+        subscribers.push({ SubscriptionType: 'SNS', Address: TopicArn })
+      }
 
       await new BudgetsClient({ region: 'us-east-1', credentials: creds })
         .send(new CreateBudgetCommand({
@@ -258,7 +320,7 @@ function registerIpcHandlers(win) {
               Threshold:           80,
               ThresholdType:       'PERCENTAGE',
             },
-            Subscribers: [{ SubscriptionType: 'EMAIL', Address: email }],
+            Subscribers: subscribers,
           }],
         }))
 
@@ -372,7 +434,7 @@ function registerIpcHandlers(win) {
 
   // ── Cost anomaly detection ────────────────────────────────────────────────
 
-  handleIpc('create-anomaly-detection', async (_event, { threshold, email }) => {
+  handleIpc('create-anomaly-detection', async (_event, { threshold, email, phone }) => {
     const store = await readCredsStore()
     if (!store.accessKeyId || !store.secretAccessKey) {
       return { ok: false, error: 'No credentials configured. Save your AWS credentials first.' }
@@ -384,10 +446,18 @@ function registerIpcHandlers(win) {
         CreateAnomalySubscriptionCommand,
       } = require('@aws-sdk/client-cost-explorer')
 
-      const client = new CostExplorerClient({
-        region: 'us-east-1',
-        credentials: { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey },
-      })
+      const creds = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+
+      const subscribers = [{ Address: email, Type: 'EMAIL' }]
+
+      if (phone) {
+        const { SNSClient } = require('@aws-sdk/client-sns')
+        const snsClient = new SNSClient({ region: 'us-east-1', credentials: creds })
+        const TopicArn = await createAlertTopic(snsClient, { name: 'anomaly-sms-alerts', principal: 'costalerts.amazonaws.com', phone })
+        subscribers.push({ Address: TopicArn, Type: 'SNS' })
+      }
+
+      const client = new CostExplorerClient({ region: 'us-east-1', credentials: creds })
 
       const { MonitorArn } = await client.send(new CreateAnomalyMonitorCommand({
         AnomalyMonitor: {
@@ -401,7 +471,7 @@ function registerIpcHandlers(win) {
         AnomalySubscription: {
           SubscriptionName: 'anomaly-alert',
           MonitorArnList:   [MonitorArn],
-          Subscribers:      [{ Address: email, Type: 'EMAIL' }],
+          Subscribers:      subscribers,
           Threshold:        threshold,
           Frequency:        'IMMEDIATE',
         },
@@ -410,6 +480,199 @@ function registerIpcHandlers(win) {
       return { ok: true }
     } catch (error) {
       log.error('[ipc][create-anomaly-detection]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  // ── GuardDuty SMS alert ───────────────────────────────────────────────────
+  // Creates an SNS SMS subscription and an EventBridge rule so HIGH-severity
+  // GuardDuty findings trigger a text message to the given phone number.
+
+  handleIpc('enable-sms-security-alert', async (_event, { phone }) => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured. Save your AWS credentials first.' }
+    }
+    try {
+      const { SNSClient } = require('@aws-sdk/client-sns')
+      const { EventBridgeClient } = require('@aws-sdk/client-eventbridge')
+
+      const region = store.region || 'eu-west-1'
+      const creds  = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+
+      const snsClient = new SNSClient({ region, credentials: creds })
+      const TopicArn = await createAlertTopic(snsClient, { name: 'guardduty-security-alerts', principal: 'events.amazonaws.com', phone })
+
+      const ebClient = new EventBridgeClient({ region, credentials: creds })
+      await putAlertRule(ebClient, {
+        name:         'guardduty-high-severity-findings',
+        description:  'SMS alert for GuardDuty HIGH severity findings',
+        eventPattern: {
+          source:        ['aws.guardduty'],
+          'detail-type': ['GuardDuty Finding'],
+          detail:        { severity: [{ numeric: ['>=', 7] }] },
+        },
+        targetArn:     TopicArn,
+        inputPathsMap: { severity: '$.detail.severity', type: '$.detail.type', region: '$.region' },
+        inputTemplate: '"AWS ALERT: GuardDuty - <type> (severity <severity>) in <region>"',
+      })
+
+      return { ok: true }
+    } catch (error) {
+      log.error('[ipc][enable-sms-security-alert]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  // ── Root credential status ────────────────────────────────────────────────
+  // Calls GetAccountSummary to check whether root access keys and root MFA are
+  // enabled. Works with both root and IAM credentials (needs iam:GetAccountSummary).
+
+  handleIpc('check-root-credentials', async () => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured.' }
+    }
+    try {
+      const { IAMClient, GetAccountSummaryCommand } = require('@aws-sdk/client-iam')
+      const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts')
+      const creds = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+
+      const [summaryRes, identityRes] = await Promise.all([
+        new IAMClient({ region: 'us-east-1', credentials: creds }).send(new GetAccountSummaryCommand({})),
+        new STSClient({ region: 'us-east-1', credentials: creds }).send(new GetCallerIdentityCommand({})),
+      ])
+
+      const map = summaryRes.SummaryMap ?? {}
+      return {
+        ok:          true,
+        keysPresent: (map['AccountAccessKeysPresent'] ?? 0) > 0,
+        mfaEnabled:  (map['AccountMFAEnabled'] ?? 0) > 0,
+        accountId:   identityRes.Account,
+        isRoot:      identityRes.Arn?.endsWith(':root') ?? false,
+      }
+    } catch (error) {
+      log.error('[ipc][check-root-credentials]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  // ── Root access key deletion ───────────────────────────────────────────────
+  // Deletes the currently-stored credentials' access keys — but only after
+  // deleteAccessKeysIfRoot confirms via STS that they belong to root.
+
+  handleIpc('delete-root-access-keys', async () => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured.' }
+    }
+    try {
+      const { IAMClient } = require('@aws-sdk/client-iam')
+      const creds  = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+      const client = new IAMClient({ region: 'us-east-1', credentials: creds })
+
+      const deleted = await deleteAccessKeysIfRoot(client, creds)
+      return deleted
+        ? { ok: true }
+        : { ok: false, error: 'Current credentials are not root — refusing to delete access keys.' }
+    } catch (error) {
+      log.error('[ipc][delete-root-access-keys]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  // ── Virtual MFA device creation ───────────────────────────────────────────
+  // Creates a virtual MFA device for root. Returns a base64 QR code PNG and
+  // the base32 TOTP seed. Must be called while root credentials are active.
+
+  handleIpc('create-virtual-mfa-device', async () => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured.' }
+    }
+    try {
+      const { IAMClient, CreateVirtualMFADeviceCommand } = require('@aws-sdk/client-iam')
+      const creds = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+
+      const { VirtualMFADevice } = await new IAMClient({ region: 'us-east-1', credentials: creds })
+        .send(new CreateVirtualMFADeviceCommand({ VirtualMFADeviceName: 'root-account-mfa-device' }))
+
+      return {
+        ok:           true,
+        serialNumber: VirtualMFADevice.SerialNumber,
+        qrCodePng:    Buffer.from(VirtualMFADevice.QRCodePNG).toString('base64'),
+        base32Seed:   Buffer.from(VirtualMFADevice.Base32StringSeed).toString('utf8'),
+      }
+    } catch (error) {
+      log.error('[ipc][create-virtual-mfa-device]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  // ── Enable MFA device ─────────────────────────────────────────────────────
+  // Activates the virtual MFA device using two consecutive TOTP codes.
+  // Omitting UserName causes the API to apply the device to the caller (root).
+
+  handleIpc('enable-mfa-device', async (_event, { serialNumber, authCode1, authCode2 }) => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured.' }
+    }
+    try {
+      const { IAMClient, EnableMFADeviceCommand } = require('@aws-sdk/client-iam')
+      const creds = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+
+      await new IAMClient({ region: 'us-east-1', credentials: creds })
+        .send(new EnableMFADeviceCommand({
+          SerialNumber:        serialNumber,
+          AuthenticationCode1: authCode1,
+          AuthenticationCode2: authCode2,
+        }))
+
+      return { ok: true }
+    } catch (error) {
+      log.error('[ipc][enable-mfa-device]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  // ── Root login alarm ──────────────────────────────────────────────────────
+  // Creates an SNS topic + EventBridge rule that fires on every root console
+  // sign-in. AWS routes aws.signin CloudTrail events to EventBridge by default,
+  // so no explicit CloudTrail trail is needed.
+
+  handleIpc('create-root-login-alarm', async (_event, { email, phone }) => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured.' }
+    }
+    try {
+      const { SNSClient } = require('@aws-sdk/client-sns')
+      const { EventBridgeClient } = require('@aws-sdk/client-eventbridge')
+
+      const region = store.region || 'eu-west-1'
+      const creds  = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+
+      const sns = new SNSClient({ region, credentials: creds })
+      const TopicArn = await createAlertTopic(sns, { name: 'root-login-alarm', principal: 'events.amazonaws.com', email, phone })
+
+      const eb = new EventBridgeClient({ region, credentials: creds })
+      await putAlertRule(eb, {
+        name:         'root-account-login-alarm',
+        description:  'Alert on every root account console sign-in',
+        eventPattern: {
+          source:        ['aws.signin'],
+          'detail-type': ['AWS Console Sign In via CloudTrail'],
+          detail:        { userIdentity: { type: ['Root'] } },
+        },
+        targetArn:     TopicArn,
+        inputPathsMap: { account: '$.account', region: '$.region', time: '$.time' },
+        inputTemplate: '"AWS ALERT: Root account sign-in detected in <region> at <time> (account <account>)"',
+      })
+
+      return { ok: true }
+    } catch (error) {
+      log.error('[ipc][create-root-login-alarm]', error.message)
       return { ok: false, error: error.message }
     }
   })
@@ -429,6 +692,17 @@ function registerIpcHandlers(win) {
   handleIpc('open-log-dir', async () => {
     const result = await shell.openPath(log.LOG_DIR)
     return result ? { ok: false, error: result } : { ok: true }
+  })
+
+
+  handleIpc('open-external', async (_event, url) => {
+    try {
+      await shell.openExternal(url)
+      return { ok: true }
+    } catch (error) {
+      log.error('[ipc][open-external]', error.message)
+      return { ok: false, error: error.message }
+    }
   })
 
   // ── Error logging ─────────────────────────────────────────────────────────
