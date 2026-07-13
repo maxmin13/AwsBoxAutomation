@@ -51,6 +51,13 @@ git clone git@github.com:maxmin13/AwsBoxAutomation.git
 cd AwsBoxAutomation
 ```
 
+## Project layout
+
+- `app/` — Electron + React GUI (main process, preload, renderer)
+- `vm/` — VM provisioning (datacenter creation, Ansible provisioning, access keys/config)
+- `docs/` — setup and feature documentation
+- `scripts/` — machine bootstrap scripts
+
 ## Python environment
 
 ```bash

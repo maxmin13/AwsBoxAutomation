@@ -13,7 +13,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveCredentials: (accessKeyId, secretAccessKey, region) =>
     ipcRenderer.invoke('save-credentials', { accessKeyId, secretAccessKey, region }),
 
-  validateCredentials:  () => ipcRenderer.invoke('validate-credentials'),
+  validateCredentials:  (accessKeyId, secretAccessKey, region) =>
+    ipcRenderer.invoke('validate-credentials', accessKeyId ? { accessKeyId, secretAccessKey, region } : undefined),
   encryptionAvailable:  () => ipcRenderer.invoke('encryption-available'),
 
   // ── Datacenter ────────────────────────────────────────────

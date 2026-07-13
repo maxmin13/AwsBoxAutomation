@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 
 interface LoginPageProps {
   onNext: () => void
-  onBack: () => void
+  onBack?: () => void
 }
 
 export default function LoginPage({ onNext, onBack }: LoginPageProps) {
@@ -30,6 +30,11 @@ export default function LoginPage({ onNext, onBack }: LoginPageProps) {
     setSaving(true)
     setError(null)
     try {
+      const result = await window.electronAPI.validateCredentials(accessKeyId, secretAccessKey, region)
+      if (!result.ok) {
+        setError(result.error ?? 'Could not verify these credentials with AWS.')
+        return
+      }
       await window.electronAPI.saveCredentials(accessKeyId, secretAccessKey, region)
       onNext()
     } catch (err) {
@@ -49,14 +54,16 @@ export default function LoginPage({ onNext, onBack }: LoginPageProps) {
   return (
     <div className="max-w-md mx-auto">
 
-      <div className="mb-3">
-        <button
-          onClick={onBack}
-          className="px-3 py-1 text-sm border border-zinc-600 hover:border-zinc-400 text-zinc-400 hover:text-zinc-200 rounded transition-colors"
-        >
-          ← Back
-        </button>
-      </div>
+      {onBack && (
+        <div className="mb-3">
+          <button
+            onClick={onBack}
+            className="px-3 py-1 text-sm border border-zinc-600 hover:border-zinc-400 text-zinc-400 hover:text-zinc-200 rounded transition-colors"
+          >
+            ← Back
+          </button>
+        </div>
+      )}
 
       <h1 className="text-2xl font-semibold text-zinc-100 mb-1">AWS Credentials</h1>
       <p className="text-zinc-400 text-sm mb-4">Enter your AWS credentials to continue.</p>
@@ -135,7 +142,7 @@ export default function LoginPage({ onNext, onBack }: LoginPageProps) {
           disabled={!canSubmit}
           className="w-full px-4 py-2 text-sm bg-blue-700 hover:bg-blue-600 text-white font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {saving ? 'Saving...' : 'Next'}
+          {saving ? 'Verifying...' : 'Next'}
         </button>
 
       </div>

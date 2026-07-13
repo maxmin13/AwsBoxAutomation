@@ -136,16 +136,19 @@ function registerIpcHandlers(win) {
     return { ok: safeStorage.isEncryptionAvailable() }
   })
 
-  handleIpc('validate-credentials', async () => {
-    const store = await readCredsStore()
-    if (!store.accessKeyId || !store.secretAccessKey) {
+  // Validates either explicitly-passed credentials (used before they are ever
+  // saved to disk — see LoginPage) or, if none are passed, whatever is
+  // currently in the store (used by AuthContext to re-check saved credentials).
+  handleIpc('validate-credentials', async (_event, candidate) => {
+    const { accessKeyId, secretAccessKey, region } = candidate ?? await readCredsStore()
+    if (!accessKeyId || !secretAccessKey) {
       return { ok: false, error: 'No credentials configured' }
     }
     try {
       const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts')
       const client = new STSClient({
-        region: store.region || 'us-east-1',
-        credentials: { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey },
+        region: region || 'us-east-1',
+        credentials: { accessKeyId, secretAccessKey },
       })
       await client.send(new GetCallerIdentityCommand({}))
       return { ok: true }

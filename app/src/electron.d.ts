@@ -31,7 +31,7 @@ declare global {
     electronAPI: {
       loadCredentials:      () => Promise<{ ok: boolean } & Credentials>
       saveCredentials:      (accessKeyId: string, secretAccessKey: string, region: string) => Promise<{ ok: boolean }>
-      validateCredentials:  () => Promise<{ ok: boolean; error?: string }>
+      validateCredentials:  (accessKeyId?: string, secretAccessKey?: string, region?: string) => Promise<{ ok: boolean; error?: string }>
       encryptionAvailable:  () => Promise<{ ok: boolean }>
 
       describeDatacenter: () => Promise<{ ok: boolean; error?: string } & InstanceInfo>

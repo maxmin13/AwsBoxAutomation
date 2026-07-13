@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState } from 'react'
 import { useAuth } from '../AuthContext'
+import LoginPage from './LoginPage'
 
 const WIZARD_STEPS = [
   { id: 1, title: 'Root MFA'  },
@@ -17,7 +18,7 @@ export default function AccountPage() {
   }, [])
 
   // ── Page mode ─────────────────────────────────────────────────────────────
-  const [pageMode,     setPageMode]     = useState<'loading' | 'wizard' | 'summary' | 'detail'>('loading')
+  const [pageMode,     setPageMode]     = useState<'loading' | 'login' | 'wizard' | 'summary' | 'detail'>('loading')
   const [wizardStep,   setWizardStep]   = useState(1)
   const [isRootCaller, setIsRootCaller] = useState(false)
   const [accountId,    setAccountId]    = useState<string | null>(null)
@@ -87,7 +88,8 @@ export default function AccountPage() {
 
   // ── Page mode detection on load ───────────────────────────────────────────
   useEffect(() => {
-    if (!hasCredentials) { setPageMode('detail'); return }
+    if (hasCredentials === null) return
+    if (!hasCredentials) { setPageMode('login'); return }
     window.electronAPI.checkRootCredentials().then(res => {
       if (res.ok) {
         setMfaEnabled(res.mfaEnabled ?? false)
@@ -529,6 +531,10 @@ export default function AccountPage() {
         Checking account status…
       </div>
     )
+  }
+
+  if (pageMode === 'login') {
+    return <LoginPage onNext={() => setHasCredentials(true)} />
   }
 
   if (pageMode === 'wizard') {
