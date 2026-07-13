@@ -2,11 +2,9 @@ import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import awsAccountSetup from '../../../docs/AWS_ACCOUNT_SETUP.md?raw'
-import accountPage     from '../../../docs/ACCOUNT_PAGE.md?raw'
 
 const DOCS = [
   { id: 'aws-account-setup', title: 'AWS Account Setup', content: awsAccountSetup },
-  { id: 'account-page',      title: 'Account Page',      content: accountPage },
 ]
 
 export default function DocsPage() {

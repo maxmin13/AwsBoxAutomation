@@ -51,7 +51,7 @@ NOTE: Root access keys are temporary — the app deletes them automatically once
 | Page | Description
 
 | *My Account*
-| Root security hardening, IAM user creation, billing/anomaly alerts — see link:docs/ACCOUNT_PAGE.md[docs/ACCOUNT_PAGE.md]
+| Root security hardening, IAM user creation, billing/anomaly alerts — see link:docs/AWS_ACCOUNT_SETUP.md[docs/AWS_ACCOUNT_SETUP.md]
 
 | *My VMs*
 | Lists the datacenter instance with Start / Stop controls
@@ -75,5 +75,4 @@ Shown on first launch. Validates credentials against STS before saving; stored e
 == Documentation
 
 * link:docs/AWS_ACCOUNT_SETUP.md[docs/AWS_ACCOUNT_SETUP.md] — creating and hardening the AWS account
-* link:docs/ACCOUNT_PAGE.md[docs/ACCOUNT_PAGE.md] — how the Account page works
 * link:docs/DEVELOPMENT.md[docs/DEVELOPMENT.md] — machine setup and running the app locally

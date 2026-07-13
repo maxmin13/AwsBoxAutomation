@@ -76,7 +76,7 @@ All channels are registered once in `registerIpcHandlers(win)`, called from `mai
 
 ## Root vs. IAM credentials
 
-Several handlers are root-only in practice (`delete-root-access-keys`, `create-virtual-mfa-device`, `enable-mfa-device`, `create-root-login-alarm`) because a fresh AWS account has no IAM user yet and these operations must run while root keys are still active — see [ACCOUNT_PAGE.md](ACCOUNT_PAGE.md). `deleteAccessKeysIfRoot()` in `ipc-handlers.js` re-verifies the caller's ARN via STS before deleting any access key, rather than trusting a UI-supplied flag, so a stale or wrong credential set can't accidentally nuke IAM user keys.
+Several handlers are root-only in practice (`delete-root-access-keys`, `create-virtual-mfa-device`, `enable-mfa-device`, `create-root-login-alarm`) because a fresh AWS account has no IAM user yet and these operations must run while root keys are still active — see [AWS_ACCOUNT_SETUP.md](AWS_ACCOUNT_SETUP.md). `deleteAccessKeysIfRoot()` in `ipc-handlers.js` re-verifies the caller's ARN via STS before deleting any access key, rather than trusting a UI-supplied flag, so a stale or wrong credential set can't accidentally nuke IAM user keys.
 
 ## Known gaps
 
