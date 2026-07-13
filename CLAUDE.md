@@ -29,7 +29,7 @@ See [docs/ELECTRON-GUI-DESIGN.md](docs/ELECTRON-GUI-DESIGN.md) for the full file
 - `app/electron/preload.js` — `contextBridge` exposing `window.electronAPI` to the renderer; every new IPC channel needs an entry here **and** in `app/src/electron.d.ts`
 - `app/electron/logger.js` — file logger, writes to `~/.config/AwsBoxAutomation/logs/{gui,app}.log`, rotates at 2 MB / 5 MB
 - `app/src/AuthContext.tsx` — `requireCreds()` (blocks with a toast if no credentials at all) vs `withAuth()` (re-validates against STS, falls back to an inline `LoginPage` overlay) — two different gating strategies used depending on the page
-- `app/src/pages/` — one component per nav tab (`AccountPage`, `DatacenterPage` = "My VMs", `CreateVmPage`, `LogsPage` = "Console", `DocsPage`)
+- `app/src/pages/` — one component per nav tab (`AccountPage`, `DatacenterPage` = "My VMs", `CreateVmPage`, `LogsPage` = "Activity", `DocsPage`)
 
 **`vm/` is a separate, disconnected implementation.** It contains a Python/boto3 + Ansible pipeline (`vm/datacenter/`, `vm/provision/`) for the same conceptual task (create the datacenter, provision it), predating the Electron GUI. Nothing in `app/electron/` spawns or reads from `vm/` — confirmed no `child_process`/`spawn` calls anywhere in `app/electron/*.js`. Treat the two as independent unless/until they're wired together.
 

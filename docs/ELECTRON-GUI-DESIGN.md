@@ -33,7 +33,7 @@ app/
     AuthContext.tsx              <- credential-gating context: requireCreds() / withAuth()
     ErrorBoundary.tsx            <- catches render errors, reports to log-error IPC channel
     components/
-      NavBar.tsx                 <- tab bar: My Account, My VMs, Create VM, Console, Docs
+      NavBar.tsx                 <- tab bar: My Account, My VMs, Create VM, Activity, Docs
     pages/
       AccountPage.tsx            <- root hardening + IAM user creation + billing/anomaly alerts (775 lines, largest page)
       LoginPage.tsx               <- AWS credentials form; validates via STS before saving
@@ -41,7 +41,7 @@ app/
       DatacenterPage.tsx         <- "My VMs" tab: describe/start/stop the dtc-box EC2 instance
       ProvisionPage.tsx          <- provisioning sub-view reached from DatacenterPage's detail view
       CreateVmPage.tsx           <- "Create VM" tab; shows config summary; Create button is a TODO stub
-      LogsPage.tsx                <- "Console" tab: tails gui.log / app.log
+      LogsPage.tsx                <- "Activity" tab: tails gui.log, polls every 2.5s when Sync is on
       DocsPage.tsx                <- renders this repo's Markdown docs in-app via react-markdown
 ```
 
@@ -72,7 +72,7 @@ All channels are registered once in `registerIpcHandlers(win)`, called from `mai
 
 ## State persistence
 
-`App.tsx` keeps `DatacenterPage` ("My VMs") and `LogsPage` ("Console") always mounted with `display: none` when their tab isn't active, so their internal state (loaded instance info, log tail position) survives navigation. `AccountPage`, `CreateVmPage`, and `DocsPage` are conditionally rendered and re-mount from scratch on every visit.
+`App.tsx` keeps `DatacenterPage` ("My VMs") and `LogsPage` ("Activity") always mounted with `display: none` when their tab isn't active, so their internal state (loaded instance info, log tail position) survives navigation. `AccountPage`, `CreateVmPage`, and `DocsPage` are conditionally rendered and re-mount from scratch on every visit.
 
 ## Root vs. IAM credentials
 

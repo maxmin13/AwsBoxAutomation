@@ -13,7 +13,7 @@ An Electron + React desktop app for provisioning and managing an AWS VM "datacen
 * *IAM user creation* — creates a scoped IAM user and deletes the temporary root access keys once it's active
 * *Credential gate* — validates AWS credentials against STS (`GetCallerIdentity`) before ever saving them; stored encrypted at rest via the OS keychain (`safeStorage`) where available
 * *My VMs* — creates/starts/stops the AWS "datacenter" (VPC, subnet, security group, EC2 instance, DNS record)
-* *Console* — live viewer for the app's own log file
+* *Activity* — live viewer for the app's own log file
 * *Docs* — renders the project's Markdown docs inside the app
 
 == Requirements
@@ -59,7 +59,7 @@ NOTE: Root access keys are temporary — the app deletes them automatically once
 | *Create VM*
 | Provisions a new VPC, subnet, security group, EC2 instance, and DNS record
 
-| *Console*
+| *Activity*
 | Live view of the app's log file
 
 | *Docs*

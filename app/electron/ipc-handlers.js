@@ -684,7 +684,7 @@ function registerIpcHandlers(win) {
 
   handleIpc('read-log', async () => {
     try {
-      const content = await fs.promises.readFile(log.APP_FILE, 'utf8')
+      const content = await fs.promises.readFile(log.LOG_FILE, 'utf8')
       const lines = content.split('\n')
       return { ok: true, content: lines.slice(-500).join('\n') }
     } catch {

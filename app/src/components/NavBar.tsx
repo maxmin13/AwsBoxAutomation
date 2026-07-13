@@ -9,7 +9,7 @@ const NAV_ITEMS: { page: Page; label: string }[] = [
   { page: 'account',     label: 'My Account' },
   { page: 'vms',         label: 'My VMs'     },
   { page: 'create',      label: 'Create VM'  },
-  { page: 'logs',        label: 'Console'    },
+  { page: 'logs',        label: 'Activity'   },
   { page: 'docs',        label: 'Docs'       },
 ]
 
