@@ -101,7 +101,23 @@ Leave **Delete root access keys after creating** checked (recommended) — the a
 
 After this step the app operates entirely under IAM credentials.
 
-### Step 3 — Alerts (optional)
+### Step 3 — IAM User MFA (mandatory)
+
+Sets up a virtual MFA device for the new IAM user, then mints its first temporary session — the same two-step wizard pattern as root MFA (step 1), plus a third sub-step to start the session.
+
+**Scan QR code:** clicking **Set Up IAM User MFA** calls `iam:CreateVirtualMFADevice`, named after the IAM username so it doesn't collide with root's device. Scan it with any TOTP app.
+
+**Enter codes:** enter two consecutive 6-digit codes to call `iam:EnableMFADevice` and activate the device.
+
+**Start session:** enter one more fresh code to call `sts:GetSessionToken`, which exchanges the permanent access key + MFA code for temporary credentials valid for 4 hours. The app holds this session in memory only — it is never written to disk, and is lost on every restart.
+
+**Why:** IAM user creation (step 2) attaches an inline policy alongside the chosen role that denies privileged actions unless `aws:MultiFactorAuthPresent` is true. This means the permanent access key saved to disk in step 2 is, by itself, no longer sufficient to do anything privileged — even if that key leaks (e.g. the credentials file is read off disk), an attacker still needs a live MFA code to call `sts:GetSessionToken` before they can do damage. A handful of self-service actions (managing your own MFA device, `GetSessionToken` itself, and read-only status checks like `GetCallerIdentity`, `GetAccountSummary`, and `DescribeInstances`) are exempted from this requirement — otherwise you could never bootstrap your first device or check "My VMs" without already having a session.
+
+Once your first session is minted, subsequent privileged actions in the app — billing/anomaly/alarm setup, the security hardening cards, starting or stopping the VM — work without interruption for 4 hours. When the session expires, the app automatically prompts for a fresh MFA code the next time you attempt a privileged action, then retries it once you enter a valid code. Read-only actions (like the My VMs status view) never require MFA and keep working even with an expired or absent session.
+
+> This only applies to IAM users created after this feature shipped. An IAM user created by an older version of the app keeps unconditional access under its permanent key unless you create a new IAM user or attach the policy manually via the IAM console.
+
+### Step 4 — Alerts (optional)
 
 All alerts require an email address. A phone number (E.164 format, e.g. `+353871234567`) is optional for SMS delivery. Click **Next Step** to skip and configure later.
 
@@ -147,7 +163,7 @@ AWS ALERT: Root account sign-in detected in eu-west-1 at 2026-06-13T10:42:00Z (a
 
 > **Email confirmation:** after clicking Create Root Login Alarm, AWS sends a subscription confirmation email. You must click the link in that email before alerts are delivered.
 
-### Step 4 — Security Hardening (optional)
+### Step 5 — Security Hardening (optional)
 
 One-click hardening steps. Each button calls the AWS API once and stays green — there is nothing to undo from this UI. Click **Complete Setup** when done.
 
