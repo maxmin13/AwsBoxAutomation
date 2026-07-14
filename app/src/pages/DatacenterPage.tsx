@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import type { InstanceInfo } from '../electron.d'
 import ProvisionPage from './ProvisionPage'
 import { useAuth } from '../AuthContext'
+import PricingLink from '../components/PricingLink'
 
 type View = null | 'provision' | 'detail'
 
@@ -70,7 +71,7 @@ interface InstanceCardProps {
 }
 
 function InstanceCard({ info, onProvision, onDetail, onRefresh }: InstanceCardProps) {
-  const { requireCreds, withAuth } = useAuth()
+  const { requireCreds, withAuth, withSession } = useAuth()
   const [busy,     setBusy]     = useState(false)
   const [starting, setStarting] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -146,6 +147,12 @@ function InstanceCard({ info, onProvision, onDetail, onRefresh }: InstanceCardPr
           <p className="text-zinc-400 text-xs">{info.publicIp} · dtc.maxmin.it</p>
         )}
 
+        {info.found && (
+          <p className="text-zinc-600 text-xs">
+            Billed while running · <PricingLink url="https://aws.amazon.com/ec2/pricing/" label="EC2 pricing ↗" />
+          </p>
+        )}
+
         {error && <p className="text-red-400 text-xs">{error}</p>}
 
         {/* Action buttons */}
@@ -154,7 +161,7 @@ function InstanceCard({ info, onProvision, onDetail, onRefresh }: InstanceCardPr
           {/* Start / Stop — mutually exclusive */}
           {isRunning || inTransit ? (
             <button
-              onClick={() => requireCreds(() => withAuth(() => setShowStopModal(true)))}
+              onClick={() => requireCreds(() => withSession(() => setShowStopModal(true)))}
               disabled={busy || inTransit}
               className="px-3 py-1 text-sm bg-red-700 hover:bg-red-600 text-white font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -162,7 +169,7 @@ function InstanceCard({ info, onProvision, onDetail, onRefresh }: InstanceCardPr
             </button>
           ) : (
             <button
-              onClick={() => requireCreds(() => withAuth(handleStart))}
+              onClick={() => requireCreds(() => withSession(handleStart))}
               disabled={busy || !info.found || (!isStopped && !inTransit)}
               className="px-3 py-1 text-sm bg-blue-700 hover:bg-blue-600 text-white font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -308,6 +315,10 @@ function DetailPage({ info, onBack }: DetailPageProps) {
           ))}
         </dl>
       </div>
+
+      <p className="text-zinc-600 text-xs mt-3">
+        Billed while running · <PricingLink url="https://aws.amazon.com/ec2/pricing/" label="EC2 pricing ↗" />
+      </p>
 
     </div>
   )

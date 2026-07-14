@@ -227,19 +227,21 @@ To revisit any step, click **Re-run setup →** in the Account page header.
 
 A summary of every protection the wizard sets up, what it defends against, and where to configure it. All of it is optional after the two mandatory steps (root MFA, IAM user creation) — apply as much or as little as fits your use case.
 
-| Measure | Defends against | Configured in |
-| --- | --- | --- |
-| Root MFA | Root password alone being enough to sign in and make irreversible changes | Step 1 |
-| Root access key deletion | A long-lived root key sitting on disk indefinitely, unmonitored | Step 2 |
-| IAM user MFA-gated sessions | A leaked permanent IAM key being immediately usable for privileged actions | Step 3 |
-| Root login alarm | A root console sign-in going unnoticed | Step 4 |
-| Billing alert | A forgotten resource silently accumulating charges | Step 4 |
-| Cost anomaly detection | A sudden spending spike going unnoticed until the monthly bill | Step 4 |
-| IAM password policy | Weak or reused passwords for IAM console users | Step 5 |
-| S3 Block Public Access | A bucket becoming publicly readable/writable through a bucket-level ACL or policy | Step 5 |
-| GuardDuty | Unusual API calls, network traffic, DNS activity, or EC2 behaviour going undetected | Step 5 |
-| IAM Access Analyzer | A resource-based policy unintentionally granting access from outside the account | Step 5 |
-| GuardDuty SMS alert | A HIGH-severity finding sitting unread in the console | Step 5 |
+| Measure | Defends against | Configured in | Cost |
+| --- | --- | --- | --- |
+| Root MFA | Root password alone being enough to sign in and make irreversible changes | Step 1 | Free |
+| Root access key deletion | A long-lived root key sitting on disk indefinitely, unmonitored | Step 2 | Free |
+| IAM user MFA-gated sessions | A leaked permanent IAM key being immediately usable for privileged actions | Step 3 | Free |
+| Root login alarm | A root console sign-in going unnoticed | Step 4 | Free ([SNS pricing](https://aws.amazon.com/sns/pricing/), usage here is negligible) |
+| Billing alert | A forgotten resource silently accumulating charges | Step 4 | Free — first 2 budgets/account, then [Budgets pricing](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/) |
+| Cost anomaly detection | A sudden spending spike going unnoticed until the monthly bill | Step 4 | Free ([pricing](https://aws.amazon.com/aws-cost-management/aws-cost-anomaly-detection/pricing/)) |
+| IAM password policy | Weak or reused passwords for IAM console users | Step 5 | Free |
+| S3 Block Public Access | A bucket becoming publicly readable/writable through a bucket-level ACL or policy | Step 5 | Free |
+| GuardDuty | Unusual API calls, network traffic, DNS activity, or EC2 behaviour going undetected | Step 5 | **Paid after a 30-day trial** ([pricing](https://aws.amazon.com/guardduty/pricing/)) |
+| IAM Access Analyzer | A resource-based policy unintentionally granting access from outside the account | Step 5 | Free |
+| GuardDuty SMS alert | A HIGH-severity finding sitting unread in the console | Step 5 | Free itself, but requires GuardDuty running — paid once GuardDuty's trial ends |
+
+Everything here is free except **GuardDuty** (and, by extension, the GuardDuty SMS alert, which depends on it) — that one starts billing after a 30-day trial, scaling with the volume of CloudTrail events, VPC Flow Logs, and DNS queries analyzed. Skip steps 5's GuardDuty card (and the SMS alert) if you want a fully free setup; every other measure still applies.
 
 **The two layers that matter most, and why they're separate:**
 

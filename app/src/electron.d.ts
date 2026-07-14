@@ -47,11 +47,14 @@ declare global {
       createAnomalyDetection:  (threshold: number, email: string, phone?: string) => Promise<{ ok: boolean; error?: string }>
       enableSmsSecurityAlert:  (phone: string) => Promise<{ ok: boolean; error?: string }>
 
-      checkRootCredentials:   () => Promise<{ ok: boolean; error?: string; keysPresent?: boolean; mfaEnabled?: boolean; accountId?: string; isRoot?: boolean }>
+      checkRootCredentials:   () => Promise<{ ok: boolean; error?: string; keysPresent?: boolean; mfaEnabled?: boolean; accountId?: string; isRoot?: boolean; iamMfaEnabled?: boolean }>
       deleteRootAccessKeys:   () => Promise<{ ok: boolean; error?: string }>
-      createVirtualMfaDevice: () => Promise<{ ok: boolean; error?: string; serialNumber?: string; qrCodePng?: string; base32Seed?: string }>
-      enableMfaDevice:        (serialNumber: string, authCode1: string, authCode2: string) => Promise<{ ok: boolean; error?: string }>
+      createVirtualMfaDevice: (deviceName?: string) => Promise<{ ok: boolean; error?: string; serialNumber?: string; qrCodePng?: string; base32Seed?: string }>
+      enableMfaDevice:        (serialNumber: string, authCode1: string, authCode2: string, userName?: string) => Promise<{ ok: boolean; error?: string }>
       createRootLoginAlarm:   (email: string, phone?: string) => Promise<{ ok: boolean; error?: string }>
+
+      getSessionToken:  (authCode: string) => Promise<{ ok: boolean; error?: string; expiresAt?: number }>
+      getSessionStatus: () => Promise<{ ok: boolean; active?: boolean; expiresAt?: number }>
 
       readLog:      () => Promise<{ ok: boolean; content?: string }>
       openLogDir:   () => Promise<{ ok: boolean; error?: string }>

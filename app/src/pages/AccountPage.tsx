@@ -1,16 +1,18 @@
 import { Fragment, useEffect, useState } from 'react'
 import { useAuth } from '../AuthContext'
 import LoginPage from './LoginPage'
+import PricingLink from '../components/PricingLink'
 
 const WIZARD_STEPS = [
   { id: 1, title: 'Root MFA'  },
   { id: 2, title: 'IAM User'  },
-  { id: 3, title: 'Alerts'    },
-  { id: 4, title: 'Security'  },
+  { id: 3, title: 'IAM MFA'   },
+  { id: 4, title: 'Alerts'    },
+  { id: 5, title: 'Security'  },
 ]
 
 export default function AccountPage() {
-  const { hasCredentials, setHasCredentials, requireCreds, withAuth } = useAuth()
+  const { hasCredentials, setHasCredentials, requireCreds, withAuth, withSession } = useAuth()
 
   const [region, setRegion] = useState<string | null>(null)
   useEffect(() => {
@@ -48,6 +50,21 @@ export default function AccountPage() {
   const [iamSecretCopied,    setIamSecretCopied]    = useState(false)
   const [iamSaved,           setIamSaved]           = useState(false)
   const [iamRootKeysDeleted, setIamRootKeysDeleted] = useState(false)
+
+  // ── IAM user MFA + first session ──────────────────────────────────────────
+  const [iamMfaStep,   setIamMfaStep]   = useState(0) // 0=idle,1=QR,2=codes,3=mint first session
+  const [iamMfaSerial, setIamMfaSerial] = useState('')
+  const [iamMfaQrCode, setIamMfaQrCode] = useState('')
+  const [iamMfaSecret, setIamMfaSecret] = useState('')
+  const [iamMfaCode1,  setIamMfaCode1]  = useState('')
+  const [iamMfaCode2,  setIamMfaCode2]  = useState('')
+  const [iamMfaBusy,   setIamMfaBusy]   = useState(false)
+  const [iamMfaError,  setIamMfaError]  = useState<string | null>(null)
+  const [iamMfaDone,   setIamMfaDone]   = useState(false)
+  const [sessionCode,   setSessionCode]   = useState('')
+  const [sessionBusy,   setSessionBusy]   = useState(false)
+  const [sessionError,  setSessionError]  = useState<string | null>(null)
+  const [sessionMinted, setSessionMinted] = useState(false)
 
   // ── Billing alert ─────────────────────────────────────────────────────────
   const [budgetAmount, setBudgetAmount] = useState('5')
@@ -98,7 +115,9 @@ export default function AccountPage() {
         setKeysPresent(res.keysPresent ?? false)
         if (res.mfaEnabled) setMfaDone(true)
         if (!res.isRoot) {
-          setPageMode('detail')
+          setIamMfaDone(res.iamMfaEnabled ?? false)
+          if (!res.iamMfaEnabled) { setWizardStep(3); setPageMode('wizard') }
+          else { setPageMode('detail') }
         } else if (!res.mfaEnabled) {
           setWizardStep(1); setPageMode('wizard')
         } else {
@@ -160,10 +179,52 @@ export default function AccountPage() {
     })
   }
 
+  function handleIamMfaStart() {
+    withAuth(async () => {
+      setIamMfaBusy(true); setIamMfaError(null)
+      const res = await window.electronAPI.createVirtualMfaDevice(iamUsername)
+      setIamMfaBusy(false)
+      if (res.ok && res.serialNumber && res.qrCodePng) {
+        setIamMfaSerial(res.serialNumber); setIamMfaQrCode(res.qrCodePng); setIamMfaSecret(res.base32Seed ?? '')
+        setIamMfaStep(1)
+      } else {
+        setIamMfaError(res.error ?? 'Unknown error')
+      }
+    })
+  }
+
+  function handleIamMfaActivate() {
+    if (iamMfaCode1.length < 6 || iamMfaCode2.length < 6) return
+    withAuth(async () => {
+      setIamMfaBusy(true); setIamMfaError(null)
+      const res = await window.electronAPI.enableMfaDevice(iamMfaSerial, iamMfaCode1.trim(), iamMfaCode2.trim(), iamUsername)
+      setIamMfaBusy(false)
+      if (res.ok) {
+        setIamMfaDone(true); setIamMfaStep(3)
+      } else {
+        setIamMfaError(res.error ?? 'Unknown error')
+      }
+    })
+  }
+
+  function handleMintFirstSession() {
+    if (sessionCode.length < 6) return
+    withAuth(async () => {
+      setSessionBusy(true); setSessionError(null)
+      const res = await window.electronAPI.getSessionToken(sessionCode.trim())
+      setSessionBusy(false)
+      if (res.ok) {
+        setSessionMinted(true); setIamMfaStep(0)
+      } else {
+        setSessionError(res.error ?? 'Unknown error')
+      }
+    })
+  }
+
   function handleCreateBillingAlert() {
     const amount = parseFloat(budgetAmount)
     if (!amount || !budgetEmail.trim()) return
-    requireCreds(() => withAuth(async () => {
+    requireCreds(() => withSession(async () => {
       setBudgetBusy(true); setBudgetError(null); setBudgetDone(false)
       const res = await window.electronAPI.createBillingAlert(amount, budgetEmail.trim(), budgetPhone.trim() || undefined)
       setBudgetBusy(false)
@@ -174,7 +235,7 @@ export default function AccountPage() {
   function handleCreateAnomalyDetection() {
     const threshold = parseFloat(anomalyThreshold)
     if (!threshold || !anomalyEmail.trim()) return
-    requireCreds(() => withAuth(async () => {
+    requireCreds(() => withSession(async () => {
       setAnomalyBusy(true); setAnomalyError(null); setAnomalyDone(false)
       const res = await window.electronAPI.createAnomalyDetection(threshold, anomalyEmail.trim(), anomalyPhone.trim() || undefined)
       setAnomalyBusy(false)
@@ -184,7 +245,7 @@ export default function AccountPage() {
 
   function handleCreateRootAlarm() {
     if (!alarmEmail.trim()) return
-    requireCreds(() => withAuth(async () => {
+    requireCreds(() => withSession(async () => {
       setAlarmBusy(true); setAlarmError(null); setAlarmDone(false)
       const res = await window.electronAPI.createRootLoginAlarm(alarmEmail.trim(), alarmPhone.trim() || undefined)
       setAlarmBusy(false)
@@ -195,7 +256,7 @@ export default function AccountPage() {
   function handleEnableSmsAlert() {
     if (!smsPhone.trim()) return
     if (!guardDuty.done) { setSmsError('Enable GuardDuty first — SMS alerts require an active GuardDuty detector.'); return }
-    requireCreds(() => withAuth(async () => {
+    requireCreds(() => withSession(async () => {
       setSmsBusy(true); setSmsError(null); setSmsDone(false)
       const res = await window.electronAPI.enableSmsSecurityAlert(smsPhone.trim())
       setSmsBusy(false)
@@ -204,7 +265,7 @@ export default function AccountPage() {
   }
 
   function runSecurity(fn: () => Promise<{ ok: boolean; error?: string }>, set: (s: S) => void) {
-    requireCreds(() => withAuth(async () => {
+    requireCreds(() => withSession(async () => {
       set({ busy: true, done: false, error: null })
       const res = await fn()
       set(res.ok ? { busy: false, done: true, error: null } : { busy: false, done: false, error: res.error ?? 'Unknown error' })
@@ -220,10 +281,7 @@ export default function AccountPage() {
 
   const isValidEmail  = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.trim())
   const isValidPhone  = (v: string) => /^\+\d{7,15}$/.test(v.trim())
-  const pricingLink   = (url: string, label = 'AWS pricing ↗') => (
-    <button onClick={() => window.electronAPI.openExternal(url)}
-      className="underline text-zinc-500 hover:text-zinc-300 transition-colors">{label}</button>
-  )
+  const pricingLink   = (url: string, label = 'AWS pricing ↗') => <PricingLink url={url} label={label} />
 
   const ic = (value: string) =>
     'w-full px-2 py-1 bg-zinc-700 border rounded text-zinc-100 text-xs ' +
@@ -248,7 +306,7 @@ export default function AccountPage() {
         <div>
           <p className="text-zinc-200 text-xs font-semibold">Root MFA</p>
           <p className="text-zinc-500 text-xs mt-0.5">Virtual MFA device for root. Requires Google Authenticator, Authy, or any TOTP app.</p>
-          <p className="text-zinc-600 text-xs mt-0.5">Free</p>
+          <p className="text-amber-600 text-xs mt-0.5">Free · {pricingLink('https://aws.amazon.com/iam/pricing/')}</p>
         </div>
         <span className={`shrink-0 flex items-center gap-1 text-xs px-1.5 py-0.5 rounded ${mfaEnabled || mfaDone ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'}`}>
           <span className={`w-1.5 h-1.5 rounded-full ${mfaEnabled || mfaDone ? 'bg-green-400' : 'bg-red-400'}`} />
@@ -307,12 +365,88 @@ export default function AccountPage() {
     </div>
   )
 
+  const iamMfaCard = (
+    <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-4 flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-zinc-200 text-xs font-semibold">IAM User MFA</p>
+          <p className="text-zinc-500 text-xs mt-0.5">Virtual MFA device for {iamUsername || 'the IAM user'}. From now on, the permanent key alone won't be enough for privileged actions.</p>
+          <p className="text-amber-600 text-xs mt-0.5">Free · {pricingLink('https://aws.amazon.com/iam/pricing/')}</p>
+        </div>
+        <span className={`shrink-0 flex items-center gap-1 text-xs px-1.5 py-0.5 rounded ${iamMfaDone ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${iamMfaDone ? 'bg-green-400' : 'bg-red-400'}`} />
+          {iamMfaDone ? 'Enabled' : 'Disabled'}
+        </span>
+      </div>
+      <div className="flex-1 flex flex-col gap-2">
+        {iamMfaError && <p className="text-red-400 text-xs">{iamMfaError}</p>}
+        {iamMfaStep === 0 && !iamMfaDone && (
+          <p className="text-zinc-500 text-xs">Click below to generate a QR code, then scan it with your authenticator app.</p>
+        )}
+        {iamMfaStep === 1 && (
+          <>
+            <p className="text-zinc-400 text-xs">Scan this QR code in your authenticator app, then click Next.</p>
+            <div className="flex justify-center bg-white rounded p-1.5">
+              <img src={`data:image/png;base64,${iamMfaQrCode}`} alt="MFA QR code" className="w-28 h-28" />
+            </div>
+            {iamMfaSecret && (
+              <details className="text-xs">
+                <summary className="text-zinc-500 cursor-pointer select-none">Manual entry code</summary>
+                <code className="block text-zinc-300 break-all mt-1 leading-relaxed">{iamMfaSecret}</code>
+              </details>
+            )}
+          </>
+        )}
+        {iamMfaStep === 2 && (
+          <>
+            <p className="text-zinc-400 text-xs">Enter two consecutive 6-digit codes from your authenticator app.</p>
+            <input type="text" inputMode="numeric" maxLength={6} value={iamMfaCode1}
+              onChange={e => setIamMfaCode1(e.target.value.replace(/\D/g, ''))}
+              placeholder="Code 1" className={ic(iamMfaCode1)} />
+            <input type="text" inputMode="numeric" maxLength={6} value={iamMfaCode2}
+              onChange={e => setIamMfaCode2(e.target.value.replace(/\D/g, ''))}
+              placeholder="Code 2 (next 30s window)" className={ic(iamMfaCode2)} />
+          </>
+        )}
+        {iamMfaStep === 3 && (
+          <>
+            <p className="text-zinc-400 text-xs">MFA activated. Enter a fresh code to start your first session.</p>
+            <input type="text" inputMode="numeric" maxLength={6} value={sessionCode}
+              onChange={e => setSessionCode(e.target.value.replace(/\D/g, ''))}
+              placeholder="Code" className={ic(sessionCode)} />
+            {sessionError && <p className="text-red-400 text-xs">{sessionError}</p>}
+          </>
+        )}
+        {iamMfaDone && iamMfaStep === 0 && sessionMinted && <p className="text-green-400 text-xs">MFA activated — session started.</p>}
+      </div>
+      {!iamMfaDone && iamMfaStep === 0 && (
+        <button onClick={handleIamMfaStart} disabled={iamMfaBusy || !iamUsername.trim()} className={primaryBtn}>
+          {iamMfaBusy ? 'Generating QR...' : 'Set Up IAM User MFA'}
+        </button>
+      )}
+      {iamMfaStep === 1 && <button onClick={() => setIamMfaStep(2)} className={primaryBtn}>Next: Enter Codes →</button>}
+      {iamMfaStep === 2 && (
+        <div className="flex flex-col gap-1.5">
+          <button onClick={handleIamMfaActivate} disabled={iamMfaBusy || iamMfaCode1.length < 6 || iamMfaCode2.length < 6} className={primaryBtn}>
+            {iamMfaBusy ? 'Activating...' : 'Activate MFA'}
+          </button>
+          <button onClick={() => setIamMfaStep(1)} disabled={iamMfaBusy} className="text-xs text-zinc-500 hover:text-zinc-300 text-center py-0.5">← Back</button>
+        </div>
+      )}
+      {iamMfaStep === 3 && (
+        <button onClick={handleMintFirstSession} disabled={sessionBusy || sessionCode.length < 6} className={primaryBtn}>
+          {sessionBusy ? 'Starting...' : 'Start Session'}
+        </button>
+      )}
+    </div>
+  )
+
   const iamCard = (
     <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-4 flex flex-col gap-3">
       <div>
         <p className="text-zinc-200 text-xs font-semibold">Create IAM User</p>
         <p className="text-zinc-500 text-xs mt-0.5">Creates an administrator user and an access key. Credentials switch to IAM automatically.</p>
-        <p className="text-zinc-600 text-xs mt-0.5">Free</p>
+        <p className="text-amber-600 text-xs mt-0.5">Free · {pricingLink('https://aws.amazon.com/iam/pricing/')}</p>
       </div>
       <div className="flex flex-col gap-1.5 flex-1">
         <label className="text-zinc-400 text-xs">Username</label>
@@ -357,7 +491,7 @@ export default function AccountPage() {
       <div>
         <p className="text-zinc-200 text-xs font-semibold">Set Billing Alert</p>
         <p className="text-zinc-500 text-xs mt-0.5">Creates a monthly budget — email alert when 80% is reached.</p>
-        <p className="text-zinc-600 text-xs mt-0.5">Free (first 2 budgets/account) · {pricingLink('https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/')}</p>
+        <p className="text-amber-600 text-xs mt-0.5">Free (first 2 budgets/account) · {pricingLink('https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/')}</p>
       </div>
       <div className="flex flex-col gap-1.5 flex-1">
         <div className="flex gap-2">
@@ -386,7 +520,7 @@ export default function AccountPage() {
       <div>
         <p className="text-zinc-200 text-xs font-semibold">Cost Anomaly Detection</p>
         <p className="text-zinc-500 text-xs mt-0.5">Immediate email alert when spending spikes unexpectedly, regardless of your monthly budget.</p>
-        <p className="text-zinc-600 text-xs mt-0.5">Free · {pricingLink('https://aws.amazon.com/aws-cost-management/aws-cost-anomaly-detection/pricing/')}</p>
+        <p className="text-amber-600 text-xs mt-0.5">Free · {pricingLink('https://aws.amazon.com/aws-cost-management/aws-cost-anomaly-detection/pricing/')}</p>
       </div>
       <div className="flex flex-col gap-1.5 flex-1">
         <div className="flex gap-2">
@@ -415,7 +549,7 @@ export default function AccountPage() {
       <div>
         <p className="text-zinc-200 text-xs font-semibold">Root Login Alarm</p>
         <p className="text-zinc-500 text-xs mt-0.5">Email alert on every root console sign-in via EventBridge + SNS.</p>
-        <p className="text-zinc-600 text-xs mt-0.5">Free · {pricingLink('https://aws.amazon.com/sns/pricing/')}</p>
+        <p className="text-amber-600 text-xs mt-0.5">Free · {pricingLink('https://aws.amazon.com/sns/pricing/')}</p>
       </div>
       <div className="flex flex-col gap-1.5 flex-1">
         <label className="text-zinc-400 text-xs">Alert email</label>
@@ -439,9 +573,12 @@ export default function AccountPage() {
       ['IAM Access Analyzer',   'Flags IAM policies and resources accessible from outside your account.',    accessAn,  setAccessAn,  () => window.electronAPI.enableAccessAnalyzer(),  'Enable',        'Enabling...', 'Enabled'],
     ] as const
   ).map(([title, desc, state, setter, fn, label, busyLabel, doneLabel]) => {
+    const freePricingUrl = title === 'S3 Block Public Access'
+      ? 'https://aws.amazon.com/s3/pricing/'
+      : 'https://aws.amazon.com/iam/pricing/'
     const costNode = title === 'GuardDuty'
       ? <p className="text-amber-600 text-xs mt-1">Paid after 30-day trial · {pricingLink('https://aws.amazon.com/guardduty/pricing/')}</p>
-      : <p className="text-zinc-600 text-xs mt-1">Free</p>
+      : <p className="text-amber-600 text-xs mt-1">Free · {pricingLink(freePricingUrl)}</p>
     return (
       <div key={title} className="bg-zinc-800 border border-zinc-700 rounded-lg p-4 flex flex-col gap-3">
         <div className="flex-1">
@@ -576,8 +713,23 @@ export default function AccountPage() {
           </div>
         )}
 
-        {/* ── Step 3: Alerts ── */}
+        {/* ── Step 3: IAM User MFA ── */}
         {wizardStep === 3 && (
+          <div className="flex flex-col gap-4">
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-100">Secure your IAM user</h2>
+              <p className="text-zinc-500 text-xs mt-0.5">Set up MFA for {iamUsername || 'the IAM user'}. From now on, you'll enter a fresh code to start a 4-hour session before doing anything privileged.</p>
+            </div>
+            <div className="max-w-sm">{iamMfaCard}</div>
+            <div className="flex items-center justify-between">
+              {backBtn}
+              {navBtn('Next Step →', () => setWizardStep(4), !(iamMfaDone && sessionMinted))}
+            </div>
+          </div>
+        )}
+
+        {/* ── Step 4: Alerts ── */}
+        {wizardStep === 4 && (
           <div className="flex flex-col gap-4">
             <div>
               <h2 className="text-sm font-semibold text-zinc-100">Configure alerts</h2>
@@ -590,13 +742,13 @@ export default function AccountPage() {
             </div>
             <div className="flex items-center justify-between">
               {backBtn}
-              {navBtn('Next Step →', () => setWizardStep(4))}
+              {navBtn('Next Step →', () => setWizardStep(5))}
             </div>
           </div>
         )}
 
-        {/* ── Step 4: Security Hardening ── */}
-        {wizardStep === 4 && (
+        {/* ── Step 5: Security Hardening ── */}
+        {wizardStep === 5 && (
           <div className="flex flex-col gap-4">
             <div>
               <h2 className="text-sm font-semibold text-zinc-100">Security hardening</h2>
@@ -625,6 +777,7 @@ export default function AccountPage() {
       { label: 'Root MFA',              detail: 'Virtual MFA device activated',            done: mfaDone },
       { label: 'IAM User',              detail: iamUsername || undefined,                   done: iamSaved },
       { label: 'Root access keys',      detail: iamRootKeysDeleted ? 'Deleted' : 'Kept',   done: iamRootKeysDeleted },
+      { label: 'IAM MFA',               detail: iamMfaDone && sessionMinted ? 'MFA activated, session started' : undefined, done: iamMfaDone && sessionMinted },
       { label: 'Billing alert',         detail: budgetDone ? `$${budgetAmount}/mo → ${budgetEmail}` : undefined, done: budgetDone },
       { label: 'Cost anomaly detection',detail: anomalyDone ? `$${anomalyThreshold} threshold → ${anomalyEmail}` : undefined, done: anomalyDone },
       { label: 'Root login alarm',      detail: alarmDone ? alarmEmail : undefined,         done: alarmDone },
@@ -636,9 +789,9 @@ export default function AccountPage() {
     ]
 
     const groups = [
-      { title: 'Account',   rows: rows.slice(0, 3) },
-      { title: 'Alerts',    rows: rows.slice(3, 6) },
-      { title: 'Security',  rows: rows.slice(6)    },
+      { title: 'Account',   rows: rows.slice(0, 4) },
+      { title: 'Alerts',    rows: rows.slice(4, 7) },
+      { title: 'Security',  rows: rows.slice(7)    },
     ]
 
     return (
@@ -744,7 +897,7 @@ export default function AccountPage() {
             </span>
           </div>
         </div>
-        <button onClick={() => { setWizardStep(isRootCaller ? 1 : 3); setPageMode('wizard') }}
+        <button onClick={() => { setWizardStep(isRootCaller ? 1 : 4); setPageMode('wizard') }}
           className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors shrink-0">
           {isRootCaller ? 'Re-run setup →' : 'Configure alerts & security →'}
         </button>
@@ -754,6 +907,7 @@ export default function AccountPage() {
         { label: 'Root MFA',         value: mfaEnabled || mfaDone ? 'Enabled' : 'Disabled',       ok: mfaEnabled || mfaDone },
         { label: 'Root access keys', value: keysPresent ? 'Present' : iamRootKeysDeleted ? 'Deleted' : 'Not detected', ok: !keysPresent },
         { label: 'IAM user',         value: iamSaved ? iamUsername : 'Not created this session',   ok: iamSaved || null },
+        { label: 'IAM MFA',          value: iamMfaDone ? 'Enabled' : 'Disabled',                    ok: iamMfaDone },
       ])}
 
       {detailSection('Alerts', [

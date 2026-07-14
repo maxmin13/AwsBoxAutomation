@@ -59,14 +59,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteRootAccessKeys: () =>
     ipcRenderer.invoke('delete-root-access-keys'),
 
-  createVirtualMfaDevice: () =>
-    ipcRenderer.invoke('create-virtual-mfa-device'),
+  createVirtualMfaDevice: (deviceName) =>
+    ipcRenderer.invoke('create-virtual-mfa-device', { deviceName }),
 
-  enableMfaDevice: (serialNumber, authCode1, authCode2) =>
-    ipcRenderer.invoke('enable-mfa-device', { serialNumber, authCode1, authCode2 }),
+  enableMfaDevice: (serialNumber, authCode1, authCode2, userName) =>
+    ipcRenderer.invoke('enable-mfa-device', { serialNumber, authCode1, authCode2, userName }),
 
   createRootLoginAlarm: (email, phone) =>
     ipcRenderer.invoke('create-root-login-alarm', { email, phone }),
+
+  // ── MFA-gated session ─────────────────────────────────────
+  getSessionToken: (authCode) =>
+    ipcRenderer.invoke('get-session-token', { authCode }),
+
+  getSessionStatus: () =>
+    ipcRenderer.invoke('get-session-status'),
 
   // ── Log viewer ────────────────────────────────────────────
   readLog: () => ipcRenderer.invoke('read-log'),

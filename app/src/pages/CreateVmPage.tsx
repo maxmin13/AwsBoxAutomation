@@ -1,4 +1,5 @@
 import { useAuth } from '../AuthContext'
+import PricingLink from '../components/PricingLink'
 
 export default function CreateVmPage() {
   const { requireCreds, withAuth } = useAuth()
@@ -22,6 +23,11 @@ export default function CreateVmPage() {
         <h1 className="text-2xl font-semibold text-zinc-100">Create VM</h1>
         <p className="text-zinc-500 text-sm mt-1">
           Creates VPC, subnet, security group, EC2 instance, and DNS record on AWS.
+        </p>
+        <p className="text-zinc-600 text-xs mt-1">
+          EC2 instance billed while running · {' '}
+          <PricingLink url="https://aws.amazon.com/ec2/pricing/" label="EC2 pricing ↗" /> ·{' '}
+          <PricingLink url="https://aws.amazon.com/route53/pricing/" label="Route 53 pricing ↗" />
         </p>
       </div>
 

@@ -8,6 +8,8 @@ const path = require('path')
 const fs   = require('fs')
 const os   = require('os')
 const log = require('./logger')
+const sessionStore = require('./session-store')
+const { mfaEnforcementPolicy } = require('./mfa-enforcement-policy')
 
 // Credentials store — in userData so it survives reinstalls
 const CREDS_DIR  = app?.isPackaged
@@ -38,7 +40,7 @@ async function writeCredsStore(data) {
 }
 
 // Channels excluded from IPC logging — keep credentials out of gui.log
-const SILENT_CHANNELS = new Set(['read-log', 'load-credentials', 'save-credentials'])
+const SILENT_CHANNELS = new Set(['read-log', 'load-credentials', 'save-credentials', 'get-session-token'])
 
 function truncate(str, max = 120) {
   return str.length <= max ? str : str.slice(0, max) + ` …[+${str.length - max} chars]`
@@ -215,7 +217,7 @@ function registerIpcHandlers(win) {
       const { EC2Client, StartInstancesCommand } = require('@aws-sdk/client-ec2')
       const client = new EC2Client({
         region: store.region || 'eu-west-1',
-        credentials: { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey },
+        credentials: sessionStore.getActiveCredentials(store),
       })
       await client.send(new StartInstancesCommand({ InstanceIds: [instanceId] }))
       return { ok: true }
@@ -231,7 +233,7 @@ function registerIpcHandlers(win) {
       const { EC2Client, StopInstancesCommand } = require('@aws-sdk/client-ec2')
       const client = new EC2Client({
         region: store.region || 'eu-west-1',
-        credentials: { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey },
+        credentials: sessionStore.getActiveCredentials(store),
       })
       await client.send(new StopInstancesCommand({ InstanceIds: [instanceId] }))
       return { ok: true }
@@ -257,6 +259,7 @@ function registerIpcHandlers(win) {
         IAMClient,
         CreateUserCommand,
         AttachUserPolicyCommand,
+        PutUserPolicyCommand,
         CreateAccessKeyCommand,
       } = require('@aws-sdk/client-iam')
 
@@ -265,6 +268,11 @@ function registerIpcHandlers(win) {
 
       await client.send(new CreateUserCommand({ UserName: username }))
       await client.send(new AttachUserPolicyCommand({ UserName: username, PolicyArn: policyArn }))
+      await client.send(new PutUserPolicyCommand({
+        UserName:       username,
+        PolicyName:     'enforce-mfa-for-privileged-actions',
+        PolicyDocument: JSON.stringify(mfaEnforcementPolicy),
+      }))
 
       const keyResponse = await client.send(new CreateAccessKeyCommand({ UserName: username }))
       const key = keyResponse.AccessKey
@@ -291,9 +299,14 @@ function registerIpcHandlers(win) {
     }
     try {
       const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts')
-      const { BudgetsClient, CreateBudgetCommand }  = require('@aws-sdk/client-budgets')
+      const {
+        BudgetsClient,
+        CreateBudgetCommand,
+        UpdateBudgetCommand,
+        CreateSubscriberCommand,
+      } = require('@aws-sdk/client-budgets')
 
-      const creds = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+      const creds = sessionStore.getActiveCredentials(store)
 
       const identity = await new STSClient({ region: 'us-east-1', credentials: creds })
         .send(new GetCallerIdentityCommand({}))
@@ -307,25 +320,46 @@ function registerIpcHandlers(win) {
         subscribers.push({ SubscriptionType: 'SNS', Address: TopicArn })
       }
 
-      await new BudgetsClient({ region: 'us-east-1', credentials: creds })
-        .send(new CreateBudgetCommand({
+      const budgetsClient = new BudgetsClient({ region: 'us-east-1', credentials: creds })
+      const budgetName = 'monthly-limit'
+      const notification = {
+        NotificationType:   'ACTUAL',
+        ComparisonOperator: 'GREATER_THAN',
+        Threshold:          80,
+        ThresholdType:      'PERCENTAGE',
+      }
+      const newBudget = {
+        BudgetName:  budgetName,
+        BudgetLimit: { Amount: String(amount), Unit: 'USD' },
+        TimeUnit:    'MONTHLY',
+        BudgetType:  'COST',
+      }
+
+      try {
+        await budgetsClient.send(new CreateBudgetCommand({
           AccountId: identity.Account,
-          Budget: {
-            BudgetName: `monthly-limit-${amount}usd`,
-            BudgetLimit: { Amount: String(amount), Unit: 'USD' },
-            TimeUnit: 'MONTHLY',
-            BudgetType: 'COST',
-          },
-          NotificationsWithSubscribers: [{
-            Notification: {
-              NotificationType:    'ACTUAL',
-              ComparisonOperator:  'GREATER_THAN',
-              Threshold:           80,
-              ThresholdType:       'PERCENTAGE',
-            },
-            Subscribers: subscribers,
-          }],
+          Budget: newBudget,
+          NotificationsWithSubscribers: [{ Notification: notification, Subscribers: subscribers }],
         }))
+      } catch (error) {
+        if (error.name !== 'DuplicateRecordException') throw error
+        // A budget from a previous run already exists under this fixed name —
+        // update its limit in place instead of creating a second budget, then
+        // (re-)attach subscribers (ignoring "already subscribed").
+        await budgetsClient.send(new UpdateBudgetCommand({ AccountId: identity.Account, NewBudget: newBudget }))
+        for (const subscriber of subscribers) {
+          try {
+            await budgetsClient.send(new CreateSubscriberCommand({
+              AccountId:    identity.Account,
+              BudgetName:   budgetName,
+              Notification: notification,
+              Subscriber:   subscriber,
+            }))
+          } catch (subError) {
+            if (subError.name !== 'DuplicateRecordException') throw subError
+          }
+        }
+      }
 
       return { ok: true }
     } catch (error) {
@@ -345,7 +379,7 @@ function registerIpcHandlers(win) {
       const { IAMClient, UpdateAccountPasswordPolicyCommand } = require('@aws-sdk/client-iam')
       await new IAMClient({
         region: 'us-east-1',
-        credentials: { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey },
+        credentials: sessionStore.getActiveCredentials(store),
       }).send(new UpdateAccountPasswordPolicyCommand({
         MinimumPasswordLength:      12,
         RequireUppercaseCharacters: true,
@@ -373,7 +407,7 @@ function registerIpcHandlers(win) {
     try {
       const { STSClient, GetCallerIdentityCommand }           = require('@aws-sdk/client-sts')
       const { S3ControlClient, PutPublicAccessBlockCommand }  = require('@aws-sdk/client-s3-control')
-      const creds = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+      const creds = sessionStore.getActiveCredentials(store)
 
       const { Account } = await new STSClient({ region: 'us-east-1', credentials: creds })
         .send(new GetCallerIdentityCommand({}))
@@ -406,7 +440,7 @@ function registerIpcHandlers(win) {
       const { GuardDutyClient, CreateDetectorCommand } = require('@aws-sdk/client-guardduty')
       await new GuardDutyClient({
         region: store.region || 'eu-west-1',
-        credentials: { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey },
+        credentials: sessionStore.getActiveCredentials(store),
       }).send(new CreateDetectorCommand({ Enable: true }))
       return { ok: true }
     } catch (error) {
@@ -426,7 +460,7 @@ function registerIpcHandlers(win) {
       const { AccessAnalyzerClient, CreateAnalyzerCommand } = require('@aws-sdk/client-accessanalyzer')
       await new AccessAnalyzerClient({
         region: store.region || 'eu-west-1',
-        credentials: { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey },
+        credentials: sessionStore.getActiveCredentials(store),
       }).send(new CreateAnalyzerCommand({ analyzerName: 'account-analyzer', type: 'ACCOUNT' }))
       return { ok: true }
     } catch (error) {
@@ -446,10 +480,13 @@ function registerIpcHandlers(win) {
       const {
         CostExplorerClient,
         CreateAnomalyMonitorCommand,
+        GetAnomalyMonitorsCommand,
         CreateAnomalySubscriptionCommand,
+        UpdateAnomalySubscriptionCommand,
+        GetAnomalySubscriptionsCommand,
       } = require('@aws-sdk/client-cost-explorer')
 
-      const creds = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+      const creds = sessionStore.getActiveCredentials(store)
 
       const subscribers = [{ Address: email, Type: 'EMAIL' }]
 
@@ -462,23 +499,45 @@ function registerIpcHandlers(win) {
 
       const client = new CostExplorerClient({ region: 'us-east-1', credentials: creds })
 
-      const { MonitorArn } = await client.send(new CreateAnomalyMonitorCommand({
-        AnomalyMonitor: {
-          MonitorName:      'all-services-monitor',
-          MonitorType:      'DIMENSIONAL',
-          MonitorDimension: 'SERVICE',
-        },
-      }))
+      // Cost Explorer doesn't reject duplicate monitor/subscription names the
+      // way Budgets does — re-running create would silently pile up a second
+      // monitor and subscription. List first and update in place if found.
+      const monitorName = 'all-services-monitor'
+      const { AnomalyMonitors = [] } = await client.send(new GetAnomalyMonitorsCommand({}))
+      let monitorArn = AnomalyMonitors.find(m => m.MonitorName === monitorName)?.MonitorArn
 
-      await client.send(new CreateAnomalySubscriptionCommand({
-        AnomalySubscription: {
-          SubscriptionName: 'anomaly-alert',
-          MonitorArnList:   [MonitorArn],
-          Subscribers:      subscribers,
-          Threshold:        threshold,
-          Frequency:        'IMMEDIATE',
-        },
-      }))
+      if (!monitorArn) {
+        const created = await client.send(new CreateAnomalyMonitorCommand({
+          AnomalyMonitor: {
+            MonitorName:      monitorName,
+            MonitorType:      'DIMENSIONAL',
+            MonitorDimension: 'SERVICE',
+          },
+        }))
+        monitorArn = created.MonitorArn
+      }
+
+      const subscriptionName = 'anomaly-alert'
+      const { AnomalySubscriptions = [] } = await client.send(new GetAnomalySubscriptionsCommand({ MonitorArn: monitorArn }))
+      const existingSubscription = AnomalySubscriptions.find(s => s.SubscriptionName === subscriptionName)
+
+      if (existingSubscription) {
+        await client.send(new UpdateAnomalySubscriptionCommand({
+          SubscriptionArn: existingSubscription.SubscriptionArn,
+          Threshold:       threshold,
+          Subscribers:     subscribers,
+        }))
+      } else {
+        await client.send(new CreateAnomalySubscriptionCommand({
+          AnomalySubscription: {
+            SubscriptionName: subscriptionName,
+            MonitorArnList:   [monitorArn],
+            Subscribers:      subscribers,
+            Threshold:        threshold,
+            Frequency:        'IMMEDIATE',
+          },
+        }))
+      }
 
       return { ok: true }
     } catch (error) {
@@ -501,7 +560,7 @@ function registerIpcHandlers(win) {
       const { EventBridgeClient } = require('@aws-sdk/client-eventbridge')
 
       const region = store.region || 'eu-west-1'
-      const creds  = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+      const creds  = sessionStore.getActiveCredentials(store)
 
       const snsClient = new SNSClient({ region, credentials: creds })
       const TopicArn = await createAlertTopic(snsClient, { name: 'guardduty-security-alerts', principal: 'events.amazonaws.com', phone })
@@ -537,22 +596,32 @@ function registerIpcHandlers(win) {
       return { ok: false, error: 'No credentials configured.' }
     }
     try {
-      const { IAMClient, GetAccountSummaryCommand } = require('@aws-sdk/client-iam')
+      const { IAMClient, GetAccountSummaryCommand, ListMFADevicesCommand } = require('@aws-sdk/client-iam')
       const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts')
       const creds = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+      const iam = new IAMClient({ region: 'us-east-1', credentials: creds })
 
       const [summaryRes, identityRes] = await Promise.all([
-        new IAMClient({ region: 'us-east-1', credentials: creds }).send(new GetAccountSummaryCommand({})),
+        iam.send(new GetAccountSummaryCommand({})),
         new STSClient({ region: 'us-east-1', credentials: creds }).send(new GetCallerIdentityCommand({})),
       ])
 
       const map = summaryRes.SummaryMap ?? {}
+      const isRoot = identityRes.Arn?.endsWith(':root') ?? false
+
+      let iamMfaEnabled = false
+      if (!isRoot) {
+        const { MFADevices = [] } = await iam.send(new ListMFADevicesCommand({}))
+        iamMfaEnabled = MFADevices.length > 0
+      }
+
       return {
         ok:          true,
         keysPresent: (map['AccountAccessKeysPresent'] ?? 0) > 0,
         mfaEnabled:  (map['AccountMFAEnabled'] ?? 0) > 0,
         accountId:   identityRes.Account,
-        isRoot:      identityRes.Arn?.endsWith(':root') ?? false,
+        isRoot,
+        iamMfaEnabled,
       }
     } catch (error) {
       log.error('[ipc][check-root-credentials]', error.message)
@@ -588,7 +657,7 @@ function registerIpcHandlers(win) {
   // Creates a virtual MFA device for root. Returns a base64 QR code PNG and
   // the base32 TOTP seed. Must be called while root credentials are active.
 
-  handleIpc('create-virtual-mfa-device', async () => {
+  handleIpc('create-virtual-mfa-device', async (_event, { deviceName } = {}) => {
     const store = await readCredsStore()
     if (!store.accessKeyId || !store.secretAccessKey) {
       return { ok: false, error: 'No credentials configured.' }
@@ -598,7 +667,7 @@ function registerIpcHandlers(win) {
       const creds = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
 
       const { VirtualMFADevice } = await new IAMClient({ region: 'us-east-1', credentials: creds })
-        .send(new CreateVirtualMFADeviceCommand({ VirtualMFADeviceName: 'root-account-mfa-device' }))
+        .send(new CreateVirtualMFADeviceCommand({ VirtualMFADeviceName: deviceName || 'root-account-mfa-device' }))
 
       return {
         ok:           true,
@@ -616,7 +685,7 @@ function registerIpcHandlers(win) {
   // Activates the virtual MFA device using two consecutive TOTP codes.
   // Omitting UserName causes the API to apply the device to the caller (root).
 
-  handleIpc('enable-mfa-device', async (_event, { serialNumber, authCode1, authCode2 }) => {
+  handleIpc('enable-mfa-device', async (_event, { serialNumber, authCode1, authCode2, userName }) => {
     const store = await readCredsStore()
     if (!store.accessKeyId || !store.secretAccessKey) {
       return { ok: false, error: 'No credentials configured.' }
@@ -627,6 +696,7 @@ function registerIpcHandlers(win) {
 
       await new IAMClient({ region: 'us-east-1', credentials: creds })
         .send(new EnableMFADeviceCommand({
+          ...(userName ? { UserName: userName } : {}), // omitted ⇒ API applies to caller (root)
           SerialNumber:        serialNumber,
           AuthenticationCode1: authCode1,
           AuthenticationCode2: authCode2,
@@ -637,6 +707,52 @@ function registerIpcHandlers(win) {
       log.error('[ipc][enable-mfa-device]', error.message)
       return { ok: false, error: error.message }
     }
+  })
+
+  // ── STS session (MFA-gated) ───────────────────────────────────────────────
+  // Mints a 4-hour STS session for the IAM user using their own MFA device.
+  // The base permanent creds are used to call GetSessionToken (this is one of
+  // the actions the mfa-enforcement-policy exempts from requiring MFA itself);
+  // the resulting session lives only in-memory (session-store.js) and is what
+  // subsequent privileged handlers use via sessionStore.getActiveCredentials().
+
+  handleIpc('get-session-token', async (_event, { authCode }) => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured.' }
+    }
+    try {
+      const { IAMClient, ListMFADevicesCommand } = require('@aws-sdk/client-iam')
+      const { STSClient, GetSessionTokenCommand } = require('@aws-sdk/client-sts')
+      const creds = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+
+      const { MFADevices = [] } = await new IAMClient({ region: 'us-east-1', credentials: creds })
+        .send(new ListMFADevicesCommand({}))
+      const serialNumber = MFADevices[0]?.SerialNumber
+      if (!serialNumber) {
+        return { ok: false, error: 'No MFA device enrolled for this IAM user yet.' }
+      }
+
+      const { Credentials } = await new STSClient({ region: 'us-east-1', credentials: creds })
+        .send(new GetSessionTokenCommand({ SerialNumber: serialNumber, TokenCode: authCode, DurationSeconds: 14400 }))
+
+      sessionStore.setSession({
+        baseAccessKeyId: store.accessKeyId,
+        accessKeyId:     Credentials.AccessKeyId,
+        secretAccessKey: Credentials.SecretAccessKey,
+        sessionToken:    Credentials.SessionToken,
+        expiresAt:       Credentials.Expiration.getTime(),
+      })
+
+      return { ok: true, expiresAt: Credentials.Expiration.getTime() }
+    } catch (error) {
+      log.error('[ipc][get-session-token]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  handleIpc('get-session-status', async () => {
+    return { ok: true, ...sessionStore.getStatus() }
   })
 
   // ── Root login alarm ──────────────────────────────────────────────────────
@@ -654,7 +770,7 @@ function registerIpcHandlers(win) {
       const { EventBridgeClient } = require('@aws-sdk/client-eventbridge')
 
       const region = store.region || 'eu-west-1'
-      const creds  = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+      const creds  = sessionStore.getActiveCredentials(store)
 
       const sns = new SNSClient({ region, credentials: creds })
       const TopicArn = await createAlertTopic(sns, { name: 'root-login-alarm', principal: 'events.amazonaws.com', email, phone })
