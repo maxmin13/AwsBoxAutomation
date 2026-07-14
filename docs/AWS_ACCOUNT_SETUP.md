@@ -223,6 +223,33 @@ To revisit any step, click **Re-run setup →** in the Account page header.
 
 ---
 
+## Security Measures
+
+A summary of every protection the wizard sets up, what it defends against, and where to configure it. All of it is optional after the two mandatory steps (root MFA, IAM user creation) — apply as much or as little as fits your use case.
+
+| Measure | Defends against | Configured in |
+| --- | --- | --- |
+| Root MFA | Root password alone being enough to sign in and make irreversible changes | Step 1 |
+| Root access key deletion | A long-lived root key sitting on disk indefinitely, unmonitored | Step 2 |
+| IAM user MFA-gated sessions | A leaked permanent IAM key being immediately usable for privileged actions | Step 3 |
+| Root login alarm | A root console sign-in going unnoticed | Step 4 |
+| Billing alert | A forgotten resource silently accumulating charges | Step 4 |
+| Cost anomaly detection | A sudden spending spike going unnoticed until the monthly bill | Step 4 |
+| IAM password policy | Weak or reused passwords for IAM console users | Step 5 |
+| S3 Block Public Access | A bucket becoming publicly readable/writable through a bucket-level ACL or policy | Step 5 |
+| GuardDuty | Unusual API calls, network traffic, DNS activity, or EC2 behaviour going undetected | Step 5 |
+| IAM Access Analyzer | A resource-based policy unintentionally granting access from outside the account | Step 5 |
+| GuardDuty SMS alert | A HIGH-severity finding sitting unread in the console | Step 5 |
+
+**The two layers that matter most, and why they're separate:**
+
+- **Root MFA + key deletion (steps 1–2)** protect the account's single most powerful identity. Root is intentionally used only to bootstrap the IAM user, then stepped away from — the app never uses root credentials again once step 2 completes.
+- **IAM user MFA-gated sessions (step 3)** protect the identity you actually use day to day. Without it, a leaked IAM access key (e.g. the credentials file copied off disk) would be permanently sufficient for whatever role you granted it — same risk profile root had before hardening. With it, the on-disk key is inert without a live MFA code: see step 3's **Why** for the exact IAM policy mechanism (`aws:MultiFactorAuthPresent`) and which actions stay exempt so you can still bootstrap and check status.
+
+Everything else (steps 4–5) is detection and alerting, not access control — it doesn't stop an attacker, but it shortens how long a compromise or cost overrun goes unnoticed.
+
+---
+
 ## Free Tier Limits
 
 For current free tier allowances see: [aws.amazon.com/free](https://aws.amazon.com/free/)
