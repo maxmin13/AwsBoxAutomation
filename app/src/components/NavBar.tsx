@@ -7,6 +7,7 @@ interface NavBarProps {
 
 const NAV_ITEMS: { page: Page; label: string }[] = [
   { page: 'account',     label: 'My Account' },
+  { page: 'costs',       label: 'Costs'      },
   { page: 'vms',         label: 'My VMs'     },
   { page: 'create',      label: 'Create VM'  },
   { page: 'logs',        label: 'Activity'   },

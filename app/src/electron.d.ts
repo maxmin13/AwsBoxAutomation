@@ -26,6 +26,21 @@ export interface InstanceInfo {
   launchTime?:  string | null
 }
 
+export interface CostSummary {
+  configured:      boolean
+  limit?:          string
+  unit?:           string
+  actualSpend?:    string
+  forecastedSpend?: string | null
+  periodEnd?:      string | null
+}
+
+export interface CostServiceAmount {
+  service: string
+  amount:  string
+  unit:    string
+}
+
 declare global {
   interface Window {
     electronAPI: {
@@ -38,22 +53,28 @@ declare global {
       startInstance:      (instanceId: string) => Promise<{ ok: boolean; error?: string }>
       stopInstance:       (instanceId: string) => Promise<{ ok: boolean; error?: string }>
 
-      createIamUser:          (username: string, policyArn: string, deleteRootKeys?: boolean) => Promise<{ ok: boolean; error?: string; accessKeyId?: string; secretAccessKey?: string; rootKeysDeleted?: boolean }>
+      createIamUser:          (username: string, policyArn: string, deleteRootKeys?: boolean) => Promise<{ ok: boolean; error?: string; accessKeyId?: string; secretAccessKey?: string; rootKeysDeleted?: boolean; resumed?: boolean }>
+      rotateAccessKey:        () => Promise<{ ok: boolean; error?: string; accessKeyId?: string; secretAccessKey?: string }>
       createBillingAlert:     (amount: number, email: string, phone?: string) => Promise<{ ok: boolean; error?: string }>
       setIamPasswordPolicy:   () => Promise<{ ok: boolean; error?: string }>
       blockS3PublicAccess:    () => Promise<{ ok: boolean; error?: string }>
       enableGuardDuty:        () => Promise<{ ok: boolean; error?: string }>
+      disableGuardDuty:       () => Promise<{ ok: boolean; error?: string }>
       enableAccessAnalyzer:   () => Promise<{ ok: boolean; error?: string }>
       createAnomalyDetection:  (threshold: number, email: string, phone?: string) => Promise<{ ok: boolean; error?: string }>
       enableSmsSecurityAlert:  (phone: string) => Promise<{ ok: boolean; error?: string }>
+      disableSmsSecurityAlert: () => Promise<{ ok: boolean; error?: string }>
 
-      checkRootCredentials:   () => Promise<{ ok: boolean; error?: string; keysPresent?: boolean; mfaEnabled?: boolean; accountId?: string; isRoot?: boolean; iamMfaEnabled?: boolean }>
+      getCostSummary:   () => Promise<{ ok: boolean; error?: string } & Partial<CostSummary>>
+      getCostBreakdown: () => Promise<{ ok: boolean; error?: string; services?: CostServiceAmount[]; start?: string; end?: string }>
+
+      checkRootCredentials:   () => Promise<{ ok: boolean; error?: string; keysPresent?: boolean; mfaEnabled?: boolean; accountId?: string; isRoot?: boolean; iamMfaEnabled?: boolean; iamUsername?: string }>
       deleteRootAccessKeys:   () => Promise<{ ok: boolean; error?: string }>
       createVirtualMfaDevice: (deviceName?: string) => Promise<{ ok: boolean; error?: string; serialNumber?: string; qrCodePng?: string; base32Seed?: string }>
       enableMfaDevice:        (serialNumber: string, authCode1: string, authCode2: string, userName?: string) => Promise<{ ok: boolean; error?: string }>
       createRootLoginAlarm:   (email: string, phone?: string) => Promise<{ ok: boolean; error?: string }>
 
-      getSessionToken:  (authCode: string) => Promise<{ ok: boolean; error?: string; expiresAt?: number }>
+      getSessionToken:  (authCode: string, durationSeconds?: number) => Promise<{ ok: boolean; error?: string; expiresAt?: number }>
       getSessionStatus: () => Promise<{ ok: boolean; active?: boolean; expiresAt?: number }>
 
       readLog:      () => Promise<{ ok: boolean; content?: string }>

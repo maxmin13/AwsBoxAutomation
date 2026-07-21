@@ -19,16 +19,20 @@ flowchart LR
     R2 -. independent of .- I2
 ```
 
-Root MFA and IAM user MFA are enrolled the same way (QR code, two TOTP
-codes) but do different jobs. Root MFA just protects the root login itself.
-IAM user MFA is paired with an enforcement policy that makes the day-to-day
-permanent access key powerless on its own — that's the part this document
-focuses on.
+Root MFA and IAM user MFA both start the same way (device creation + QR
+code) but **diverge at activation**, and do different jobs besides. Root MFA
+just protects the root login itself. IAM user MFA is paired with an
+enforcement policy that makes the day-to-day permanent access key powerless
+on its own — that's the part this document focuses on.
 
 ## 📱 Enrolling a virtual MFA device
 
-Same flow for root (`mfaCard`) and the IAM user (`iamMfaCard`) in
-`AccountPage.tsx`:
+`mfaCard` (root) and `iamMfaCard` (IAM user) in `AccountPage.tsx` share the
+device-creation step, then split: `iam:EnableMFADevice` requires a real IAM
+`UserName`, which root doesn't have — no API can activate root's own device
+(confirmed against the SDK's model and live testing; `sts:AssumeRoot`'s
+fixed task-policy list doesn't cover MFA either), so root activation only
+exists in the AWS Console:
 
 ```mermaid
 %%{init: {'theme': 'dark'}}%%
@@ -37,6 +41,7 @@ sequenceDiagram
     participant Phone as 📱 Authenticator app
     participant App
     participant AWS as AWS IAM
+    participant Console as AWS Console
 
     You->>App: Click "Set Up MFA"
     App->>AWS: CreateVirtualMFADevice
@@ -44,10 +49,25 @@ sequenceDiagram
     App-->>You: Show QR code
     You->>Phone: Scan QR code
     Phone-->>You: Displays 6-digit code (rotates every 30s)
-    You->>App: Enter two consecutive 6-digit codes
-    App->>AWS: EnableMFADevice(code1, code2)
-    AWS-->>App: MFA active
+    alt IAM user
+        You->>App: Enter two consecutive 6-digit codes
+        App->>AWS: EnableMFADevice(UserName, code1, code2)
+        AWS-->>App: MFA active
+    else Root
+        Note over App,AWS: No API can activate root's own device
+        You->>Console: Open Console, create + activate a<br/>separate device there instead
+        Console-->>You: MFA active (account-wide)
+        You->>App: Click "Check Status"
+        App->>AWS: GetAccountSummary
+        AWS-->>App: AccountMFAEnabled = true
+    end
 ```
+
+The Console flow creates its own virtual MFA device, independent from the
+one the app created — you end up with an extra, unassigned device (and a
+matching unused authenticator app entry) that's harmless but can be deleted
+later if you want to tidy up. `Check Status` reads `AccountMFAEnabled`,
+which is account-wide, not tied to which specific device activated it.
 
 ## The enforcement policy — why a leaked key isn't enough
 

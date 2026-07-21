@@ -3,4 +3,18 @@
 # on account settings rerun am I able to remove a item
 
 
-# functionality to tear down aws instances, ......., in the detail page
+# functionality to tear down aws instances, ......., in the detail pageee
+
+# give the user the possibility to delete the user
+
+
+# where did you put the rotate user access keys action
+
+# in the account summary page add a card with the admin user details
+
+# to complete the account setup journey do we need to start a user session
+# if not, remove the start session button provide only a check box
+# if mandatory, remove the start session button, mention in a note that a new token will be requested
+# can the user select the duration of the session
+# is it right to remind the user that to invalidate the token he has to rotate the keys
+

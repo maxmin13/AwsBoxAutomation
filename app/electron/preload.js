@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createIamUser: (username, policyArn, deleteRootKeys) =>
     ipcRenderer.invoke('create-iam-user', { username, policyArn, deleteRootKeys }),
 
+  rotateAccessKey: () =>
+    ipcRenderer.invoke('rotate-access-key'),
+
   createBillingAlert: (amount, email, phone) =>
     ipcRenderer.invoke('create-billing-alert', { amount, email, phone }),
 
@@ -43,6 +46,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   enableGuardDuty: () =>
     ipcRenderer.invoke('enable-guardduty'),
 
+  disableGuardDuty: () =>
+    ipcRenderer.invoke('disable-guardduty'),
+
   enableAccessAnalyzer: () =>
     ipcRenderer.invoke('enable-access-analyzer'),
 
@@ -51,6 +57,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   enableSmsSecurityAlert: (phone) =>
     ipcRenderer.invoke('enable-sms-security-alert', { phone }),
+
+  disableSmsSecurityAlert: () =>
+    ipcRenderer.invoke('disable-sms-security-alert'),
+
+  // ── Costs ──────────────────────────────────────────────────
+  getCostSummary: () =>
+    ipcRenderer.invoke('get-cost-summary'),
+
+  getCostBreakdown: () =>
+    ipcRenderer.invoke('get-cost-breakdown'),
 
   // ── Root security ─────────────────────────────────────────
   checkRootCredentials: () =>
@@ -69,8 +85,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('create-root-login-alarm', { email, phone }),
 
   // ── MFA-gated session ─────────────────────────────────────
-  getSessionToken: (authCode) =>
-    ipcRenderer.invoke('get-session-token', { authCode }),
+  getSessionToken: (authCode, durationSeconds) =>
+    ipcRenderer.invoke('get-session-token', { authCode, durationSeconds }),
 
   getSessionStatus: () =>
     ipcRenderer.invoke('get-session-status'),

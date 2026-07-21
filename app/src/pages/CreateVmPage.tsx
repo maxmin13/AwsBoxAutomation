@@ -2,7 +2,7 @@ import { useAuth } from '../AuthContext'
 import PricingLink from '../components/PricingLink'
 
 export default function CreateVmPage() {
-  const { requireCreds, withAuth } = useAuth()
+  const { withAuth } = useAuth()
 
   const config = [
     { label: 'Instance name',   value: 'dtc-box'                             },
@@ -47,7 +47,7 @@ export default function CreateVmPage() {
       </div>
 
       <button
-        onClick={() => requireCreds(() => withAuth(() => { /* TODO: trigger VM creation */ }))}
+        onClick={() => withAuth(() => { /* TODO: trigger VM creation */ })}
         className="px-4 py-2 text-sm bg-blue-700 hover:bg-blue-600 text-white font-medium rounded transition-colors"
       >
         Create VM

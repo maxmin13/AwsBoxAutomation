@@ -27,13 +27,18 @@ export default function AccountPage() {
   const [keysPresent,  setKeysPresent]  = useState(false)
 
   // ── Root MFA ──────────────────────────────────────────────────────────────
+  // AWS's IAM API has no way to activate a virtual MFA device for the root
+  // user itself (EnableMFADevice requires a real IAM UserName — confirmed
+  // against the SDK's own model and live testing; AssumeRoot's task-policy
+  // list doesn't cover MFA either). Device creation works via API, but
+  // activation only exists in the Console — so mfaStep 1 shows the QR code
+  // plus instructions to finish there, and "Check Status" re-polls AWS
+  // (ListMFADevices, via check-root-credentials) rather than activating.
   const [mfaEnabled, setMfaEnabled] = useState(false)
-  const [mfaStep,    setMfaStep]    = useState(0) // 0=idle, 1=QR shown, 2=code entry
+  const [mfaStep,    setMfaStep]    = useState(0) // 0=idle, 1=QR shown, awaiting console activation
   const [mfaSerial,  setMfaSerial]  = useState('')
   const [mfaQrCode,  setMfaQrCode]  = useState('')
   const [mfaSecret,  setMfaSecret]  = useState('')
-  const [mfaCode1,   setMfaCode1]   = useState('')
-  const [mfaCode2,   setMfaCode2]   = useState('')
   const [mfaBusy,    setMfaBusy]    = useState(false)
   const [mfaError,   setMfaError]   = useState<string | null>(null)
   const [mfaDone,    setMfaDone]    = useState(false)
@@ -42,7 +47,6 @@ export default function AccountPage() {
   const IAM_POLICY_ARN = 'arn:aws:iam::aws:policy/AdministratorAccess'
 
   const [iamUsername,        setIamUsername]        = useState('')
-  const [iamDeleteRootKeys,  setIamDeleteRootKeys]  = useState(true)
   const [iamBusy,            setIamBusy]            = useState(false)
   const [iamError,           setIamError]           = useState<string | null>(null)
   const [iamResult,          setIamResult]          = useState<{ accessKeyId: string; secretAccessKey: string } | null>(null)
@@ -50,6 +54,14 @@ export default function AccountPage() {
   const [iamSecretCopied,    setIamSecretCopied]    = useState(false)
   const [iamSaved,           setIamSaved]           = useState(false)
   const [iamRootKeysDeleted, setIamRootKeysDeleted] = useState(false)
+  const [iamResumed,         setIamResumed]         = useState(false)
+
+  // ── Access key rotation ────────────────────────────────────────────────────
+  const [rotateBusy,         setRotateBusy]         = useState(false)
+  const [rotateError,        setRotateError]        = useState<string | null>(null)
+  const [rotateResult,       setRotateResult]       = useState<{ accessKeyId: string; secretAccessKey: string } | null>(null)
+  const [rotateKeyCopied,    setRotateKeyCopied]    = useState(false)
+  const [rotateSecretCopied, setRotateSecretCopied] = useState(false)
 
   // ── IAM user MFA + first session ──────────────────────────────────────────
   const [iamMfaStep,   setIamMfaStep]   = useState(0) // 0=idle,1=QR,2=codes,3=mint first session
@@ -61,10 +73,11 @@ export default function AccountPage() {
   const [iamMfaBusy,   setIamMfaBusy]   = useState(false)
   const [iamMfaError,  setIamMfaError]  = useState<string | null>(null)
   const [iamMfaDone,   setIamMfaDone]   = useState(false)
-  const [sessionCode,   setSessionCode]   = useState('')
-  const [sessionBusy,   setSessionBusy]   = useState(false)
-  const [sessionError,  setSessionError]  = useState<string | null>(null)
-  const [sessionMinted, setSessionMinted] = useState(false)
+  const [sessionCode,     setSessionCode]     = useState('')
+  const [sessionDuration, setSessionDuration] = useState(14400) // seconds; matches mfa-enforcement-policy.js's 4-hour cap
+  const [sessionBusy,     setSessionBusy]     = useState(false)
+  const [sessionError,    setSessionError]    = useState<string | null>(null)
+  const [sessionMinted,   setSessionMinted]   = useState(false)
 
   // ── Billing alert ─────────────────────────────────────────────────────────
   const [budgetAmount, setBudgetAmount] = useState('5')
@@ -104,6 +117,9 @@ export default function AccountPage() {
   const [smsDone,  setSmsDone]  = useState(false)
 
   // ── Page mode detection on load ───────────────────────────────────────────
+  // Clicking "My Account" always lands on the detail/landing page, regardless
+  // of how far setup has progressed — the wizard is only entered explicitly,
+  // via the "Continue setup →" button below.
   useEffect(() => {
     if (hasCredentials === null) return
     if (!hasCredentials) { setPageMode('login'); return }
@@ -116,16 +132,13 @@ export default function AccountPage() {
         if (res.mfaEnabled) setMfaDone(true)
         if (!res.isRoot) {
           setIamMfaDone(res.iamMfaEnabled ?? false)
-          if (!res.iamMfaEnabled) { setWizardStep(3); setPageMode('wizard') }
-          else { setPageMode('detail') }
-        } else if (!res.mfaEnabled) {
-          setWizardStep(1); setPageMode('wizard')
-        } else {
-          setWizardStep(2); setPageMode('wizard')
+          if (res.iamUsername) { setIamUsername(res.iamUsername); setIamSaved(true) }
+          if (res.iamMfaEnabled) {
+            window.electronAPI.getSessionStatus().then(s => { if (s.ok && s.active) setSessionMinted(true) })
+          }
         }
-      } else {
-        setPageMode('detail')
       }
+      setPageMode('detail')
     })
   }, [hasCredentials])
 
@@ -146,15 +159,15 @@ export default function AccountPage() {
     }))
   }
 
-  function handleMfaActivate() {
-    if (mfaCode1.length < 6 || mfaCode2.length < 6) return
-    if (!isRootCaller) { setMfaError('Root credentials required — you are currently signed in as an IAM user.'); return }
+  function handleMfaCheckStatus() {
     requireCreds(() => withAuth(async () => {
       setMfaBusy(true); setMfaError(null)
-      const res = await window.electronAPI.enableMfaDevice(mfaSerial, mfaCode1.trim(), mfaCode2.trim())
+      const res = await window.electronAPI.checkRootCredentials()
       setMfaBusy(false)
-      if (res.ok) {
+      if (res.ok && res.mfaEnabled) {
         setMfaDone(true); setMfaEnabled(true); setMfaStep(0)
+      } else if (res.ok) {
+        setMfaError('MFA not detected yet. Finish activating the device in the AWS Console, then check again.')
       } else {
         setMfaError(res.error ?? 'Unknown error')
       }
@@ -164,19 +177,37 @@ export default function AccountPage() {
   function handleCreateIamUser() {
     if (!iamUsername.trim()) return
     withAuth(async () => {
-      setIamBusy(true); setIamError(null); setIamResult(null); setIamSaved(false); setIamRootKeysDeleted(false)
-      const res = await window.electronAPI.createIamUser(iamUsername.trim(), IAM_POLICY_ARN, iamDeleteRootKeys)
+      setIamBusy(true); setIamError(null); setIamResult(null); setIamSaved(false); setIamRootKeysDeleted(false); setIamResumed(false)
+      const res = await window.electronAPI.createIamUser(iamUsername.trim(), IAM_POLICY_ARN, true)
       if (res.ok && res.accessKeyId && res.secretAccessKey) {
         const { region } = await window.electronAPI.loadCredentials()
         await window.electronAPI.saveCredentials(res.accessKeyId, res.secretAccessKey, region || 'eu-west-1')
         setIamSaved(true); setHasCredentials(true); setIsRootCaller(false)
         setIamResult({ accessKeyId: res.accessKeyId, secretAccessKey: res.secretAccessKey })
         if (res.rootKeysDeleted) { setIamRootKeysDeleted(true); setKeysPresent(false) }
+        if (res.resumed) setIamResumed(true)
       } else {
         setIamError(res.error ?? 'Unknown error')
       }
       setIamBusy(false)
     })
+  }
+
+  // iam:CreateAccessKey/DeleteAccessKey require an active MFA session (see
+  // mfa-enforcement-policy.js), same gating as the security hardening cards.
+  // The main process persists the new key to disk itself once it's verified,
+  // so there's no separate saveCredentials call here.
+  function handleRotateAccessKey() {
+    requireCreds(() => withSession(async () => {
+      setRotateBusy(true); setRotateError(null); setRotateResult(null)
+      const res = await window.electronAPI.rotateAccessKey()
+      if (res.ok && res.accessKeyId && res.secretAccessKey) {
+        setRotateResult({ accessKeyId: res.accessKeyId, secretAccessKey: res.secretAccessKey })
+      } else {
+        setRotateError(res.error ?? 'Unknown error')
+      }
+      setRotateBusy(false)
+    }))
   }
 
   function handleIamMfaStart() {
@@ -211,7 +242,7 @@ export default function AccountPage() {
     if (sessionCode.length < 6) return
     withAuth(async () => {
       setSessionBusy(true); setSessionError(null)
-      const res = await window.electronAPI.getSessionToken(sessionCode.trim())
+      const res = await window.electronAPI.getSessionToken(sessionCode.trim(), sessionDuration)
       setSessionBusy(false)
       if (res.ok) {
         setSessionMinted(true); setIamMfaStep(0)
@@ -264,11 +295,28 @@ export default function AccountPage() {
     }))
   }
 
+  function handleDisableSmsAlert() {
+    requireCreds(() => withSession(async () => {
+      setSmsBusy(true); setSmsError(null)
+      const res = await window.electronAPI.disableSmsSecurityAlert()
+      setSmsBusy(false)
+      res.ok ? setSmsDone(false) : setSmsError(res.error ?? 'Unknown error')
+    }))
+  }
+
   function runSecurity(fn: () => Promise<{ ok: boolean; error?: string }>, set: (s: S) => void) {
     requireCreds(() => withSession(async () => {
       set({ busy: true, done: false, error: null })
       const res = await fn()
       set(res.ok ? { busy: false, done: true, error: null } : { busy: false, done: false, error: res.error ?? 'Unknown error' })
+    }))
+  }
+
+  function runSecurityDisable(fn: () => Promise<{ ok: boolean; error?: string }>, set: (s: S) => void) {
+    requireCreds(() => withSession(async () => {
+      set({ busy: true, done: true, error: null })
+      const res = await fn()
+      set(res.ok ? { busy: false, done: false, error: null } : { busy: false, done: true, error: res.error ?? 'Unknown error' })
     }))
   }
 
@@ -278,6 +326,9 @@ export default function AccountPage() {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+
+  const formatDuration = (seconds: number) =>
+    seconds < 3600 ? `${seconds / 60}-minute` : `${seconds / 3600}-hour`
 
   const isValidEmail  = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.trim())
   const isValidPhone  = (v: string) => /^\+\d{7,15}$/.test(v.trim())
@@ -320,7 +371,7 @@ export default function AccountPage() {
         )}
         {mfaStep === 1 && (
           <>
-            <p className="text-zinc-400 text-xs">Scan this QR code in your authenticator app, then click Next.</p>
+            <p className="text-zinc-400 text-xs">Scan this QR code in your authenticator app.</p>
             <div className="flex justify-center bg-white rounded p-1.5">
               <img src={`data:image/png;base64,${mfaQrCode}`} alt="MFA QR code" className="w-28 h-28" />
             </div>
@@ -330,17 +381,9 @@ export default function AccountPage() {
                 <code className="block text-zinc-300 break-all mt-1 leading-relaxed">{mfaSecret}</code>
               </details>
             )}
-          </>
-        )}
-        {mfaStep === 2 && (
-          <>
-            <p className="text-zinc-400 text-xs">Enter two consecutive 6-digit codes from your authenticator app.</p>
-            <input type="text" inputMode="numeric" maxLength={6} value={mfaCode1}
-              onChange={e => setMfaCode1(e.target.value.replace(/\D/g, ''))}
-              placeholder="Code 1" className={ic(mfaCode1)} />
-            <input type="text" inputMode="numeric" maxLength={6} value={mfaCode2}
-              onChange={e => setMfaCode2(e.target.value.replace(/\D/g, ''))}
-              placeholder="Code 2 (next 30s window)" className={ic(mfaCode2)} />
+            <p className="text-zinc-400 text-xs mt-1">
+              AWS doesn't allow activating root's MFA device via API — finish it in the AWS Console: <span className="text-zinc-300">Security credentials</span> → <span className="text-zinc-300">Multi-factor authentication (MFA)</span>, find this device, and enter two codes there. Then check status below.
+            </p>
           </>
         )}
         {mfaDone && <p className="text-green-400 text-xs">MFA activated — root is now protected.</p>}
@@ -353,13 +396,21 @@ export default function AccountPage() {
       {(mfaDone || mfaEnabled) && mfaStep === 0 && (
         <p className="text-zinc-600 text-xs">MFA is permanent and cannot be removed from this app.</p>
       )}
-      {mfaStep === 1 && <button onClick={() => setMfaStep(2)} className={primaryBtn}>Next: Enter Codes →</button>}
-      {mfaStep === 2 && (
+      {mfaStep === 1 && (
         <div className="flex flex-col gap-1.5">
-          <button onClick={handleMfaActivate} disabled={mfaBusy || mfaCode1.length < 6 || mfaCode2.length < 6} className={primaryBtn}>
-            {mfaBusy ? 'Activating...' : 'Activate MFA'}
+          <button
+            onClick={() => window.electronAPI.openExternal('https://console.aws.amazon.com/iam/home#/security_credentials')}
+            className={primaryBtn}
+          >
+            Open AWS Console ↗
           </button>
-          <button onClick={() => setMfaStep(1)} disabled={mfaBusy} className="text-xs text-zinc-500 hover:text-zinc-300 text-center py-0.5">← Back</button>
+          <button
+            onClick={handleMfaCheckStatus}
+            disabled={mfaBusy}
+            className="w-full px-3 py-1.5 text-xs border border-zinc-600 hover:border-zinc-400 text-zinc-400 hover:text-zinc-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {mfaBusy ? 'Checking...' : 'Check Status'}
+          </button>
         </div>
       )}
     </div>
@@ -411,18 +462,40 @@ export default function AccountPage() {
         {iamMfaStep === 3 && (
           <>
             <p className="text-zinc-400 text-xs">MFA activated. Enter a fresh code to start your first session.</p>
+            <label className="text-zinc-400 text-xs">Session length</label>
+            <select value={sessionDuration} onChange={e => setSessionDuration(Number(e.target.value))}
+              className={ic(String(sessionDuration))}>
+              <option value={3600}>1 hour</option>
+              <option value={7200}>2 hours</option>
+              <option value={10800}>3 hours</option>
+              <option value={14400}>4 hours (default)</option>
+            </select>
             <input type="text" inputMode="numeric" maxLength={6} value={sessionCode}
               onChange={e => setSessionCode(e.target.value.replace(/\D/g, ''))}
               placeholder="Code" className={ic(sessionCode)} />
             {sessionError && <p className="text-red-400 text-xs">{sessionError}</p>}
           </>
         )}
-        {iamMfaDone && iamMfaStep === 0 && sessionMinted && <p className="text-green-400 text-xs">MFA activated — session started.</p>}
+        {iamMfaDone && iamMfaStep === 0 && !sessionMinted && (
+          <p className="text-zinc-500 text-xs">MFA is already enabled — start a fresh session to continue.</p>
+        )}
+        {iamMfaDone && iamMfaStep === 0 && sessionMinted && (
+          <>
+            <p className="text-green-400 text-xs">MFA activated — session started.</p>
+            <p className="text-zinc-600 text-xs">
+              Closing the app only clears this session locally — AWS has no way to revoke it early, so it stays valid for its full {formatDuration(sessionDuration)} window either way. You'll just be asked for a fresh code next time you open the app.
+              If you ever need to cut it off early, deactivate or delete the IAM user's access key: {pricingLink(`https://console.aws.amazon.com/iam/home#/users/details/${encodeURIComponent(iamUsername)}?section=security_credentials`, 'IAM security credentials ↗')}
+            </p>
+          </>
+        )}
       </div>
       {!iamMfaDone && iamMfaStep === 0 && (
         <button onClick={handleIamMfaStart} disabled={iamMfaBusy || !iamUsername.trim()} className={primaryBtn}>
           {iamMfaBusy ? 'Generating QR...' : 'Set Up IAM User MFA'}
         </button>
+      )}
+      {iamMfaDone && iamMfaStep === 0 && !sessionMinted && (
+        <button onClick={() => setIamMfaStep(3)} className={primaryBtn}>Start Session →</button>
       )}
       {iamMfaStep === 1 && <button onClick={() => setIamMfaStep(2)} className={primaryBtn}>Next: Enter Codes →</button>}
       {iamMfaStep === 2 && (
@@ -445,14 +518,14 @@ export default function AccountPage() {
     <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-4 flex flex-col gap-3">
       <div>
         <p className="text-zinc-200 text-xs font-semibold">Create IAM User</p>
-        <p className="text-zinc-500 text-xs mt-0.5">Creates an administrator user and an access key. Credentials switch to IAM automatically.</p>
+        <p className="text-zinc-500 text-xs mt-0.5">Creates an administrator IAM user and access key, then switches the app to use them for every action instead of root.</p>
         <p className="text-amber-600 text-xs mt-0.5">Free · {pricingLink('https://aws.amazon.com/iam/pricing/')}</p>
       </div>
       <div className="flex flex-col gap-1.5 flex-1">
         <label className="text-zinc-400 text-xs">Username</label>
-        <input type="text" value={iamUsername}
-          onChange={e => { setIamUsername(e.target.value); setIamResult(null); setIamSaved(false) }}
-          placeholder="e.g. admin" autoComplete="off" className={ic(iamUsername)} />
+        <input type="text" value={iamUsername} disabled={iamSaved}
+          onChange={e => setIamUsername(e.target.value)}
+          placeholder="e.g. admin" autoComplete="off" className={ic(iamUsername) + ' disabled:opacity-60 disabled:cursor-not-allowed'} />
         {iamError && <p className="text-red-400 text-xs">{iamError}</p>}
         {iamResult && (
           <div className="bg-zinc-900 border border-zinc-600 rounded p-2 flex flex-col gap-1">
@@ -470,19 +543,21 @@ export default function AccountPage() {
               </div>
             ))}
             {iamRootKeysDeleted && <p className="text-green-400 text-xs mt-0.5">Root access keys deleted.</p>}
+            {iamResumed && <p className="text-amber-400 text-xs mt-0.5">This IAM user already existed — reused it and issued a new access key.</p>}
           </div>
         )}
       </div>
       <div className="flex flex-col gap-1">
-        <label className="flex items-center gap-2 cursor-pointer select-none">
-          <input type="checkbox" checked={iamDeleteRootKeys} onChange={e => setIamDeleteRootKeys(e.target.checked)} className="accent-blue-500" />
-          <span className="text-zinc-400 text-xs">Delete root access keys after creating</span>
-        </label>
-        <p className="text-zinc-600 text-xs pl-5">Only removes API access — you can still sign in to the AWS console as root with your email and password.</p>
+        <p className="text-zinc-400 text-xs">Root access keys will be deleted after creating this user.</p>
+        <p className="text-zinc-600 text-xs">Only removes API access — you can still sign in to the AWS console as root with your email and password.</p>
       </div>
-      <button onClick={handleCreateIamUser} disabled={!iamUsername.trim() || iamBusy} className={primaryBtn}>
-        {iamBusy ? 'Creating...' : 'Create IAM User'}
-      </button>
+      {iamSaved ? (
+        <p className="text-zinc-600 text-xs">IAM user created — click <span className="text-zinc-400">Next Step →</span> below to continue.</p>
+      ) : (
+        <button onClick={handleCreateIamUser} disabled={!iamUsername.trim() || iamBusy} className={primaryBtn}>
+          {iamBusy ? 'Creating...' : 'Create IAM User'}
+        </button>
+      )}
     </div>
   )
 
@@ -565,14 +640,16 @@ export default function AccountPage() {
     </div>
   )
 
+  const outlineBtn = 'w-full px-3 py-1.5 text-xs border border-red-800 hover:border-red-600 text-red-400 hover:text-red-300 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+
   const securityToggleCards = (
     [
-      ['IAM Password Policy',   'Enforces min 12 chars, uppercase, numbers, symbols, and 90-day rotation.',  pwPolicy,  setPwPolicy,  () => window.electronAPI.setIamPasswordPolicy(), 'Apply Policy', 'Applying...', 'Applied'],
-      ['S3 Block Public Access', 'Prevents any S3 bucket from being made publicly accessible, account-wide.', s3Block,   setS3Block,   () => window.electronAPI.blockS3PublicAccess(),   'Block Access',  'Blocking...', 'Blocked'],
-      ['GuardDuty',             'Monitors for suspicious API calls, unusual logins, and crypto mining.',      guardDuty, setGuardDuty, () => window.electronAPI.enableGuardDuty(),       'Enable',        'Enabling...', 'Enabled'],
-      ['IAM Access Analyzer',   'Flags IAM policies and resources accessible from outside your account.',    accessAn,  setAccessAn,  () => window.electronAPI.enableAccessAnalyzer(),  'Enable',        'Enabling...', 'Enabled'],
+      ['IAM Password Policy',   'Enforces min 12 chars, uppercase, numbers, symbols, and 90-day rotation.',  pwPolicy,  setPwPolicy,  () => window.electronAPI.setIamPasswordPolicy(), 'Apply Policy', 'Applying...', 'Applied', undefined],
+      ['S3 Block Public Access', 'Prevents any S3 bucket from being made publicly accessible, account-wide.', s3Block,   setS3Block,   () => window.electronAPI.blockS3PublicAccess(),   'Block Access',  'Blocking...', 'Blocked', undefined],
+      ['GuardDuty',             'Monitors for suspicious API calls, unusual logins, and crypto mining.',      guardDuty, setGuardDuty, () => window.electronAPI.enableGuardDuty(),       'Enable',        'Enabling...', 'Enabled', () => window.electronAPI.disableGuardDuty()],
+      ['IAM Access Analyzer',   'Flags IAM policies and resources accessible from outside your account.',    accessAn,  setAccessAn,  () => window.electronAPI.enableAccessAnalyzer(),  'Enable',        'Enabling...', 'Enabled', undefined],
     ] as const
-  ).map(([title, desc, state, setter, fn, label, busyLabel, doneLabel]) => {
+  ).map(([title, desc, state, setter, fn, label, busyLabel, doneLabel, disableFn]) => {
     const freePricingUrl = title === 'S3 Block Public Access'
       ? 'https://aws.amazon.com/s3/pricing/'
       : 'https://aws.amazon.com/iam/pricing/'
@@ -588,9 +665,15 @@ export default function AccountPage() {
           {state.error && <p className="text-red-400 text-xs mt-1">{state.error}</p>}
           {state.done  && <p className="text-green-400 text-xs mt-1">Done.</p>}
         </div>
-        <button onClick={() => runSecurity(fn, setter as (s: S) => void)} {...iamGated(state.busy || state.done)}>
-          {state.busy ? busyLabel : state.done ? doneLabel : label}
-        </button>
+        {state.done && disableFn ? (
+          <button onClick={() => runSecurityDisable(disableFn, setter as (s: S) => void)} disabled={state.busy} className={outlineBtn}>
+            {state.busy ? 'Disabling...' : 'Disable'}
+          </button>
+        ) : (
+          <button onClick={() => runSecurity(fn, setter as (s: S) => void)} {...iamGated(state.busy || state.done)}>
+            {state.busy ? busyLabel : state.done ? doneLabel : label}
+          </button>
+        )}
       </div>
     )
   })
@@ -609,55 +692,88 @@ export default function AccountPage() {
         {smsError && <p className="text-red-400 text-xs">{smsError}</p>}
         {smsDone  && <p className="text-green-400 text-xs">Done — you'll receive a text on HIGH findings.</p>}
       </div>
-      <button onClick={handleEnableSmsAlert} {...iamGated(!isValidPhone(smsPhone) || smsBusy || smsDone || !guardDuty.done)}>
-        {smsBusy ? 'Enabling...' : smsDone ? 'Enabled' : 'Enable SMS Alert'}
-      </button>
+      {smsDone ? (
+        <button onClick={handleDisableSmsAlert} disabled={smsBusy} className={outlineBtn}>
+          {smsBusy ? 'Disabling...' : 'Disable SMS Alert'}
+        </button>
+      ) : (
+        <button onClick={handleEnableSmsAlert} {...iamGated(!isValidPhone(smsPhone) || smsBusy || !guardDuty.done)}>
+          {smsBusy ? 'Enabling...' : 'Enable SMS Alert'}
+        </button>
+      )}
     </div>
   )
 
   // ── Step indicator ────────────────────────────────────────────────────────
+  // Mirrors FedoraBoxAutomation's CreateVmPage StepIndicator (numbered circles
+  // joined by a connecting bar), adapted to keep click-to-jump-back on done steps.
 
   const stepIndicator = (
-    <div className="flex items-center gap-1 text-xs">
-      {WIZARD_STEPS.map((step, i) => (
-        <Fragment key={step.id}>
-          {i > 0 && <span className="text-zinc-700 mx-0.5">›</span>}
-          <button
-            onClick={() => { if (step.id < wizardStep) setWizardStep(step.id) }}
-            className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded transition-colors ${
-              step.id < wizardStep  ? 'text-green-400 hover:text-green-300 cursor-pointer' :
-              step.id === wizardStep ? 'text-zinc-100 font-medium cursor-default' :
-              'text-zinc-600 cursor-default'
-            }`}
-          >
-            <span className={`text-[10px] font-bold w-3 text-center ${
-              step.id < wizardStep  ? 'text-green-400' :
-              step.id === wizardStep ? 'text-blue-400' : 'text-zinc-600'
-            }`}>
-              {step.id < wizardStep ? '✓' : step.id}
-            </span>
-            {step.title}
-          </button>
-        </Fragment>
-      ))}
+    <div className="flex items-center mb-4">
+      {WIZARD_STEPS.map((step, i) => {
+        const isActive = step.id === wizardStep
+        const isDone   = step.id < wizardStep
+        return (
+          <Fragment key={step.id}>
+            <div className="flex flex-col items-center">
+              <button
+                onClick={() => { if (isDone) setWizardStep(step.id) }}
+                disabled={!isDone}
+                className={
+                  'w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-colors ' +
+                  (isDone
+                    ? 'bg-blue-600 text-white hover:bg-blue-500 cursor-pointer'
+                    : isActive
+                    ? 'bg-blue-600 text-white ring-2 ring-blue-400 ring-offset-2 ring-offset-zinc-900 cursor-default'
+                    : 'bg-zinc-700 text-zinc-400 cursor-default')
+                }
+              >
+                {isDone ? '✓' : step.id}
+              </button>
+              <span className={
+                'text-xs mt-1.5 ' +
+                (isActive ? 'text-zinc-200' : isDone ? 'text-zinc-400' : 'text-zinc-500')
+              }>
+                {step.title}
+              </span>
+            </div>
+            {i < WIZARD_STEPS.length - 1 && (
+              <div className={'flex-1 h-px mx-2 mb-4 ' + (step.id < wizardStep ? 'bg-blue-600' : 'bg-zinc-700')} />
+            )}
+          </Fragment>
+        )
+      })}
     </div>
   )
 
   // ── Wizard navigation button ──────────────────────────────────────────────
+  // Matches FedoraBoxAutomation's StepNav sizing (px-6/py-2, text-sm) and the
+  // bordered Back button treatment.
 
   const navBtn = (label: string, onClick: () => void, disabled = false) => (
     <button onClick={onClick} disabled={disabled}
-      className="px-4 py-1.5 text-xs bg-blue-700 hover:bg-blue-600 text-white font-medium rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+      className="px-6 py-2 text-sm bg-blue-700 hover:bg-blue-600 text-white font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
       {label}
     </button>
   )
 
   const backBtn = (
     <button onClick={() => setWizardStep(s => s - 1)}
-      className="px-4 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors">
+      className="px-3 py-1 text-sm border border-zinc-600 hover:border-zinc-400 text-zinc-400 hover:text-zinc-200 rounded transition-colors shrink-0">
       ← Back
     </button>
   )
+
+  // Short per-step note shown inline above the step content — everything else
+  // about the header (title, subtitle, Back placement) is fixed, mirroring
+  // FedoraBoxAutomation's CreateVmPage where "Create VM" / its subtitle never
+  // change across steps and "← Back" sits on its own line above the title.
+  const stepNote: Record<number, React.ReactNode> = {
+    2: 'Create a dedicated IAM user for day-to-day work. The app switches to IAM credentials automatically.',
+    3: <>Set up MFA for {iamUsername || 'the IAM user'}. From now on, you'll enter a fresh code to start a timed session before doing anything privileged.</>,
+    4: 'Optional. Set up cost and security notifications. You can skip and configure these later.',
+    5: 'Optional. One-click hardening steps. You can skip and apply these later.',
+  }
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -675,24 +791,31 @@ export default function AccountPage() {
   }
 
   if (pageMode === 'wizard') {
+    // Steps 1-3 show a single narrow card and read better in a tighter,
+    // centered column; steps 4-5 are card grids that need the extra width.
+    const wizardMaxW = wizardStep <= 3 ? 'max-w-3xl' : 'max-w-4xl'
     return (
-      <div className="flex flex-col gap-6">
+      <div className={`${wizardMaxW} mx-auto w-full flex flex-col gap-6`}>
+
+        {/* Header — fixed title/subtitle, mirrors FedoraBoxAutomation's CreateVmPage
+            where "Create VM" and its subtitle never change across steps.
+            Back sits inline with the title, not on its own row above it. */}
+        <div>
+          <div className="flex items-center gap-3">
+            {wizardStep > 1 && backBtn}
+            <h1 className="text-2xl font-semibold text-zinc-100">Account Setup</h1>
+          </div>
+          <p className="text-zinc-400 text-sm mt-0.5">Secure your AWS account, create an IAM user, and configure alerts.</p>
+        </div>
 
         {/* Step indicator */}
-        <div className="flex items-center justify-between">
-          {stepIndicator}
-          <span className="text-zinc-600 text-xs">Step {wizardStep} of {WIZARD_STEPS.length}</span>
-        </div>
+        {stepIndicator}
 
         {/* ── Step 1: Root MFA ── */}
         {wizardStep === 1 && (
           <div className="flex flex-col gap-4">
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-100">Secure your root account</h2>
-              <p className="text-zinc-500 text-xs mt-0.5">Set up MFA on the root account before creating any IAM users. You cannot skip this step.</p>
-            </div>
-            <div className="max-w-sm">{mfaCard}</div>
-            <div className="flex justify-end">
+            <div className="w-full">{mfaCard}</div>
+            <div className="w-full flex justify-end">
               {navBtn('Next Step →', () => setWizardStep(2), !mfaDone)}
             </div>
           </div>
@@ -701,13 +824,9 @@ export default function AccountPage() {
         {/* ── Step 2: Create IAM User ── */}
         {wizardStep === 2 && (
           <div className="flex flex-col gap-4">
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-100">Create an IAM user</h2>
-              <p className="text-zinc-500 text-xs mt-0.5">Create a dedicated IAM user for day-to-day work. The app switches to IAM credentials automatically.</p>
-            </div>
-            <div className="max-w-sm">{iamCard}</div>
-            <div className="flex items-center justify-between">
-              {backBtn}
+            <p className="text-zinc-500 text-xs">{stepNote[2]}</p>
+            <div className="w-full">{iamCard}</div>
+            <div className="w-full flex justify-end">
               {navBtn('Next Step →', () => setWizardStep(3), !iamSaved && isRootCaller)}
             </div>
           </div>
@@ -716,13 +835,9 @@ export default function AccountPage() {
         {/* ── Step 3: IAM User MFA ── */}
         {wizardStep === 3 && (
           <div className="flex flex-col gap-4">
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-100">Secure your IAM user</h2>
-              <p className="text-zinc-500 text-xs mt-0.5">Set up MFA for {iamUsername || 'the IAM user'}. From now on, you'll enter a fresh code to start a 4-hour session before doing anything privileged.</p>
-            </div>
-            <div className="max-w-sm">{iamMfaCard}</div>
-            <div className="flex items-center justify-between">
-              {backBtn}
+            <p className="text-zinc-500 text-xs">{stepNote[3]}</p>
+            <div className="w-full">{iamMfaCard}</div>
+            <div className="w-full flex justify-end">
               {navBtn('Next Step →', () => setWizardStep(4), !(iamMfaDone && sessionMinted))}
             </div>
           </div>
@@ -731,17 +846,13 @@ export default function AccountPage() {
         {/* ── Step 4: Alerts ── */}
         {wizardStep === 4 && (
           <div className="flex flex-col gap-4">
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-100">Configure alerts</h2>
-              <p className="text-zinc-500 text-xs mt-0.5">Optional. Set up cost and security notifications. You can skip and configure these later.</p>
-            </div>
+            <p className="text-zinc-500 text-xs">{stepNote[4]}</p>
             <div className="grid grid-cols-3 gap-3">
               {billingCard}
               {anomalyCard}
               {alarmCard}
             </div>
-            <div className="flex items-center justify-between">
-              {backBtn}
+            <div className="flex justify-end">
               {navBtn('Next Step →', () => setWizardStep(5))}
             </div>
           </div>
@@ -750,16 +861,12 @@ export default function AccountPage() {
         {/* ── Step 5: Security Hardening ── */}
         {wizardStep === 5 && (
           <div className="flex flex-col gap-4">
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-100">Security hardening</h2>
-              <p className="text-zinc-500 text-xs mt-0.5">Optional. One-click hardening steps. You can skip and apply these later.</p>
-            </div>
+            <p className="text-zinc-500 text-xs">{stepNote[5]}</p>
             <div className="grid grid-cols-5 gap-3">
               {securityToggleCards}
               {smsCard}
             </div>
-            <div className="flex items-center justify-between">
-              {backBtn}
+            <div className="flex justify-end">
               {navBtn('Complete Setup', () => setPageMode('summary'))}
             </div>
           </div>
@@ -788,48 +895,50 @@ export default function AccountPage() {
       { label: 'GuardDuty SMS alert',  detail: smsDone ? smsPhone : undefined,             done: smsDone },
     ]
 
-    const groups = [
-      { title: 'Account',   rows: rows.slice(0, 4) },
-      { title: 'Alerts',    rows: rows.slice(4, 7) },
-      { title: 'Security',  rows: rows.slice(7)    },
-    ]
+    const groupCard = (title: string, groupRows: Row[]) => (
+      <div className="bg-zinc-800 border border-zinc-700 rounded-lg overflow-hidden">
+        <div className="px-4 py-3">
+          <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">{title}</p>
+          <div className="divide-y divide-zinc-700/50">
+            {groupRows.map(row => (
+              <div key={row.label} className="flex items-center gap-3 py-2">
+                <span className={`shrink-0 text-xs font-bold w-3 text-center ${row.done ? 'text-green-400' : 'text-zinc-600'}`}>
+                  {row.done ? '✓' : '—'}
+                </span>
+                <span className={`text-xs flex-1 ${row.done ? 'text-zinc-200' : 'text-zinc-500'}`}>{row.label}</span>
+                {row.detail && <span className="text-xs text-zinc-500 font-mono truncate max-w-[220px]">{row.detail}</span>}
+                {!row.done && <span className="text-xs text-zinc-600">Skipped</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
 
     return (
-      <div className="flex flex-col gap-6 max-w-lg">
+      <div className="flex flex-col gap-6">
 
         <div>
           <p className="text-green-400 text-xs font-semibold uppercase tracking-wide">Setup complete</p>
-          <h2 className="text-sm font-semibold text-zinc-100 mt-0.5">Your account is configured</h2>
-          <p className="text-zinc-500 text-xs mt-1">
+          <h1 className="text-2xl font-semibold text-zinc-100 mt-0.5">Your account is configured</h1>
+          <p className="text-zinc-400 text-sm mt-1">
             Here's a summary of what was applied. Skipped items can be configured any time from the dashboard.
           </p>
         </div>
 
-        <div className="flex flex-col gap-4">
-          {groups.map(group => (
-            <div key={group.title} className="bg-zinc-800 border border-zinc-700 rounded-lg overflow-hidden">
-              <div className="px-4 py-2 border-b border-zinc-700">
-                <p className="text-zinc-400 text-xs font-semibold">{group.title}</p>
-              </div>
-              <div className="divide-y divide-zinc-700/50">
-                {group.rows.map(row => (
-                  <div key={row.label} className="flex items-center gap-3 px-4 py-2.5">
-                    <span className={`shrink-0 text-xs font-bold w-3 text-center ${row.done ? 'text-green-400' : 'text-zinc-600'}`}>
-                      {row.done ? '✓' : '—'}
-                    </span>
-                    <span className={`text-xs flex-1 ${row.done ? 'text-zinc-200' : 'text-zinc-500'}`}>{row.label}</span>
-                    {row.detail && <span className="text-xs text-zinc-500 font-mono truncate max-w-[180px]">{row.detail}</span>}
-                    {!row.done && <span className="text-xs text-zinc-600">Skipped</span>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
+        <div className="flex gap-4 items-start">
+          <div className="flex-1 flex flex-col gap-4">
+            {groupCard('Account', rows.slice(0, 4))}
+            {groupCard('Alerts',  rows.slice(4, 7))}
+          </div>
+          <div className="flex-1">
+            {groupCard('Security', rows.slice(7))}
+          </div>
         </div>
 
         <div className="flex justify-end">
           <button onClick={() => setPageMode('detail')}
-            className="px-5 py-2 text-xs bg-blue-700 hover:bg-blue-600 text-white font-medium rounded transition-colors">
+            className="px-6 py-2 text-sm bg-blue-700 hover:bg-blue-600 text-white font-medium rounded transition-colors">
             Open Dashboard →
           </button>
         </div>
@@ -856,10 +965,10 @@ export default function AccountPage() {
             }`}>
               {row.ok === true ? '✓' : row.ok === false ? '✗' : '—'}
             </span>
-            <span className={`text-xs flex-1 ${row.ok === null ? 'text-zinc-500' : 'text-zinc-200'}`}>
+            <span className={`text-xs shrink-0 ${row.ok === null ? 'text-zinc-500' : 'text-zinc-200'}`}>
               {row.label}
             </span>
-            <span className={`text-xs font-mono ${
+            <span className={`text-xs font-mono flex-1 min-w-0 truncate text-right ${
               row.ok === true  ? 'text-zinc-400' :
               row.ok === false ? 'text-red-400'  : 'text-zinc-600'
             }`}>
@@ -871,58 +980,102 @@ export default function AccountPage() {
     </div>
   )
 
+  // Where "Continue setup →" should resume, and whether the mandatory part
+  // of the wizard (root MFA → IAM user → IAM MFA) is still outstanding.
+  const setupIncomplete = isRootCaller || !iamMfaDone
+  const resumeStep = isRootCaller ? (mfaDone || mfaEnabled ? 2 : 1) : (!iamMfaDone ? 3 : 1)
+
   return (
-    <div className="flex flex-col gap-5 max-w-lg">
+    <div className="flex flex-col gap-5">
 
       {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-zinc-100">Account</h2>
-          <div className="flex items-center gap-3 mt-1.5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold text-zinc-100">Account</h1>
+          <div className="flex items-center gap-4 mt-1.5">
             {accountId && (
-              <span className="flex items-center gap-1.5 text-xs">
+              <span className="flex items-center gap-1.5 text-xs whitespace-nowrap">
                 <span className="text-zinc-500">ID</span>
                 <span className="text-zinc-300 font-mono">{accountId}</span>
               </span>
             )}
             {region && (
-              <span className="flex items-center gap-1.5 text-xs">
+              <span className="flex items-center gap-1.5 text-xs whitespace-nowrap">
                 <span className="text-zinc-500">Region</span>
                 <span className="text-zinc-300 font-mono">{region}</span>
               </span>
             )}
-            <span className="flex items-center gap-1.5 text-xs">
-              <span className="text-zinc-500">Caller</span>
-              <span className="text-zinc-300 font-mono">{isRootCaller ? 'root' : 'IAM'}</span>
+            <span className="flex items-center gap-1.5 text-xs whitespace-nowrap">
+              <span className="text-zinc-500">Signed in as</span>
+              <span className="text-zinc-300 font-mono">{isRootCaller ? 'Root' : (iamUsername || 'IAM user')}</span>
             </span>
           </div>
         </div>
-        <button onClick={() => { setWizardStep(isRootCaller ? 1 : 4); setPageMode('wizard') }}
-          className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors shrink-0">
-          {isRootCaller ? 'Re-run setup →' : 'Configure alerts & security →'}
+        <button onClick={() => { setWizardStep(resumeStep); setPageMode('wizard') }}
+          className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors shrink-0 whitespace-nowrap">
+          {setupIncomplete ? 'Continue setup →' : 'Configure alerts & security →'}
         </button>
       </div>
 
-      {detailSection('Account', [
-        { label: 'Root MFA',         value: mfaEnabled || mfaDone ? 'Enabled' : 'Disabled',       ok: mfaEnabled || mfaDone },
-        { label: 'Root access keys', value: keysPresent ? 'Present' : iamRootKeysDeleted ? 'Deleted' : 'Not detected', ok: !keysPresent },
-        { label: 'IAM user',         value: iamSaved ? iamUsername : 'Not created this session',   ok: iamSaved || null },
-        { label: 'IAM MFA',          value: iamMfaDone ? 'Enabled' : 'Disabled',                    ok: iamMfaDone },
-      ])}
+      <div className="flex gap-5 items-start">
+        <div className="flex-1 flex flex-col gap-5">
+          {detailSection('Account', [
+            { label: 'Root MFA',         value: mfaEnabled || mfaDone ? 'Enabled' : 'Disabled',       ok: mfaEnabled || mfaDone },
+            { label: 'Root access keys', value: keysPresent ? 'Present' : iamRootKeysDeleted ? 'Deleted' : 'Not detected', ok: !keysPresent },
+            { label: 'IAM user',         value: iamSaved ? iamUsername : 'Not created this session',   ok: iamSaved || null },
+            { label: 'IAM MFA',          value: iamMfaDone ? 'Enabled' : 'Disabled',                    ok: iamMfaDone },
+          ])}
 
-      {detailSection('Alerts', [
-        { label: 'Billing alert',          value: budgetDone  ? `$${budgetAmount}/mo → ${budgetEmail}`        : 'Skipped', ok: budgetDone  || null },
-        { label: 'Cost anomaly detection', value: anomalyDone ? `$${anomalyThreshold} threshold → ${anomalyEmail}` : 'Skipped', ok: anomalyDone || null },
-        { label: 'Root login alarm',       value: alarmDone   ? alarmEmail                                    : 'Skipped', ok: alarmDone   || null },
-      ])}
+          {!isRootCaller && iamUsername && (
+            <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-4 flex flex-col gap-2">
+              <div>
+                <p className="text-zinc-200 text-xs font-semibold">IAM User</p>
+                <p className="text-zinc-500 text-xs mt-0.5">
+                  Username <span className="text-zinc-300 font-mono">{iamUsername}</span>
+                  {region && <> · Region <span className="text-zinc-300 font-mono">{region}</span></>}
+                  {accountId && <> · Account <span className="text-zinc-300 font-mono">{accountId}</span></>}
+                </p>
+              </div>
+              {rotateError && <p className="text-red-400 text-xs">{rotateError}</p>}
+              {rotateResult ? (
+                <div className="bg-zinc-900 border border-zinc-600 rounded p-2 flex flex-col gap-1">
+                  <p className="text-amber-400 text-xs font-medium">New key created and saved — old key deleted. Copy the secret now, it's shown only once.</p>
+                  {([['Key ID', rotateResult.accessKeyId, rotateKeyCopied, setRotateKeyCopied], ['Secret', rotateResult.secretAccessKey, rotateSecretCopied, setRotateSecretCopied]] as const).map(([label, val, copied, setCopied]) => (
+                    <div key={label} className="flex items-center gap-2">
+                      <span className="text-zinc-400 text-xs w-10 shrink-0">{label}</span>
+                      <code className="flex-1 text-zinc-100 text-xs font-mono truncate">{val}</code>
+                      <button onClick={() => copy(val, setCopied as (v: boolean) => void)} className="text-xs text-zinc-400 hover:text-zinc-200 shrink-0">
+                        {copied ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <button onClick={handleRotateAccessKey} disabled={rotateBusy}
+                  className="self-start px-3 py-1.5 text-xs border border-zinc-600 hover:border-zinc-400 text-zinc-400 hover:text-zinc-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                  {rotateBusy ? 'Rotating...' : 'Rotate Access Key'}
+                </button>
+              )}
+            </div>
+          )}
 
-      {detailSection('Security hardening', [
-        { label: 'IAM password policy',    value: pwPolicy.done  ? 'Applied' : 'Skipped', ok: pwPolicy.done  || null },
-        { label: 'S3 block public access', value: s3Block.done   ? 'Applied' : 'Skipped', ok: s3Block.done   || null },
-        { label: 'GuardDuty',             value: guardDuty.done  ? 'Enabled' : 'Skipped', ok: guardDuty.done || null },
-        { label: 'IAM Access Analyzer',   value: accessAn.done   ? 'Enabled' : 'Skipped', ok: accessAn.done  || null },
-        { label: 'GuardDuty SMS alert',   value: smsDone ? smsPhone                       : 'Skipped', ok: smsDone        || null },
-      ])}
+          {detailSection('Alerts', [
+            { label: 'Billing alert',          value: budgetDone  ? `$${budgetAmount}/mo → ${budgetEmail}`        : 'Skipped', ok: budgetDone  || null },
+            { label: 'Cost anomaly detection', value: anomalyDone ? `$${anomalyThreshold} threshold → ${anomalyEmail}` : 'Skipped', ok: anomalyDone || null },
+            { label: 'Root login alarm',       value: alarmDone   ? alarmEmail                                    : 'Skipped', ok: alarmDone   || null },
+          ])}
+        </div>
+
+        <div className="flex-1">
+          {detailSection('Security hardening', [
+            { label: 'IAM password policy',    value: pwPolicy.done  ? 'Applied' : 'Skipped', ok: pwPolicy.done  || null },
+            { label: 'S3 block public access', value: s3Block.done   ? 'Applied' : 'Skipped', ok: s3Block.done   || null },
+            { label: 'GuardDuty',             value: guardDuty.done  ? 'Enabled' : 'Skipped', ok: guardDuty.done || null },
+            { label: 'IAM Access Analyzer',   value: accessAn.done   ? 'Enabled' : 'Skipped', ok: accessAn.done  || null },
+            { label: 'GuardDuty SMS alert',   value: smsDone ? smsPhone                       : 'Skipped', ok: smsDone        || null },
+          ])}
+        </div>
+      </div>
 
     </div>
   )

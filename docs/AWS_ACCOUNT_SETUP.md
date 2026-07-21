@@ -60,13 +60,15 @@ Navigate to the **Account** page. The app detects that root credentials are acti
 
 ### Step 1 — Root MFA (mandatory)
 
-Sets up a virtual MFA device on the root account using a two-step wizard. MFA must be enabled before proceeding to step 2.
+Sets up a virtual MFA device on the root account. MFA must be enabled before proceeding to step 2 — the **Next Step** button stays disabled until AWS confirms it, not just until you've clicked through the wizard.
+
+**AWS does not support activating a root user's own MFA device via the IAM API.** `iam:EnableMFADevice` requires a real IAM `UserName`, which root doesn't have — this holds true even with root's own credentials, an account ID substituted for the username, or an `sts:AssumeRoot` session (its task-policy list doesn't cover MFA management). Activation for root has only ever been possible through the AWS Management Console. The wizard reflects that split:
 
 **Scan QR code:** clicking **Set Up Root MFA** calls `iam:CreateVirtualMFADevice`, which returns a QR code PNG and a base32 TOTP seed. Scan it with any TOTP app (Google Authenticator, Authy, 1Password, etc.). If your app requires manual entry, expand **Manual entry code**.
 
-**Enter codes:** click **Next: Enter Codes** and enter two consecutive 6-digit codes from your authenticator app — the first from one 30-second window, the second from the next. Click **Activate MFA** to call `iam:EnableMFADevice`.
+**Activate in the Console:** click **Open AWS Console ↗** to open `console.aws.amazon.com/iam/home#/security_credentials` in your browser. AWS's own "Keep your account secure" wizard there creates and activates its *own* separate virtual MFA device (it doesn't resume the one the app just created) — pick **Authenticator app**, scan the new QR code it shows you, and enter two consecutive codes to finish. This leaves the app's original device sitting unassigned in AWS and an extra, non-functional entry in your authenticator app — harmless, but you can delete both later (IAM console → Security credentials → Multi-factor authentication, and the matching authenticator app entry) if you want to tidy up.
 
-The MFA status badge (On / Off) reflects live state from `iam:GetAccountSummary` on page load, and turns green immediately after successful activation.
+**Check Status:** back in the app, click **Check Status** to re-check `iam:GetAccountSummary`'s `AccountMFAEnabled` flag. This is an account-wide flag, not tied to which specific device activated it, so it turns green as soon as any root MFA device is active — including the one you just set up via the Console.
 
 **Why:** without MFA, anyone who obtains your root password can sign in to the console and make irreversible changes. MFA is the single most impactful protection for a root account.
 
@@ -103,7 +105,7 @@ After this step the app operates entirely under IAM credentials.
 
 ### Step 3 — IAM User MFA (mandatory)
 
-Sets up a virtual MFA device for the new IAM user, then mints its first temporary session — the same two-step wizard pattern as root MFA (step 1), plus a third sub-step to start the session.
+Sets up a virtual MFA device for the new IAM user, then mints its first temporary session. Unlike root MFA (step 1), IAM users have a real `UserName`, so `iam:EnableMFADevice` works via the API here — this step activates entirely in-app, no Console detour needed.
 
 **Scan QR code:** clicking **Set Up IAM User MFA** calls `iam:CreateVirtualMFADevice`, named after the IAM username so it doesn't collide with root's device. Scan it with any TOTP app.
 
@@ -220,6 +222,18 @@ After completing the wizard, the app displays a **setup summary** listing every 
 Click **Open Dashboard** to go to the Account detail page, which shows the live status of your account configuration. The detail page is shown on every subsequent visit to the Account tab.
 
 To revisit any step, click **Re-run setup →** in the Account page header.
+
+---
+
+## 6. Monitoring Costs
+
+The **Costs** tab shows two tiers of spend visibility, split by whether AWS charges you to fetch them:
+
+**Month-to-date total (free)** — loads automatically when you open the tab, and on **Refresh**. Reads the AWS Budget created in Step 4's billing alert (`monthly-limit`), showing accumulated spend so far this month, AWS's own end-of-month forecast, and your configured limit. If you skipped Step 4, this shows a prompt to set a budget up instead of numbers. Reading a budget's status is free.
+
+**Breakdown by service (paid, opt-in)** — click **Show breakdown by service** to call AWS Cost Explorer for a per-service table (EC2, VPC, Route 53, GuardDuty, etc.) of month-to-date cost. Cost Explorer bills per API request — see [Cost Explorer pricing](https://aws.amazon.com/aws-cost-management/pricing/) — so this only runs when you explicitly click the button, never automatically. Each click is one request.
+
+> **Brand-new account:** Cost Explorer data can take up to 24 hours to populate after an account's first billable activity. The breakdown may show an error or an empty table during that window even though the free total above is already accurate.
 
 ---
 

@@ -14,11 +14,19 @@ export default function LoginPage({ onNext, onBack }: LoginPageProps) {
   const [error,           setError]           = useState<string | null>(null)
   const [noKeychain,      setNoKeychain]      = useState(false)
 
+  // null while loading. false = nothing was ever saved (this is the very
+  // first credential entry, so it must be root — nothing else exists yet).
+  // true = a key was saved before but is no longer valid here (expired,
+  // rotated, or invalid) — by this point setup should already have moved
+  // the app onto an IAM user, so guide toward re-entering that instead.
+  const [hadSavedCredentials, setHadSavedCredentials] = useState<boolean | null>(null)
+
   useEffect(() => {
     window.electronAPI.loadCredentials().then((saved) => {
       if (saved.accessKeyId)     setAccessKeyId(saved.accessKeyId)
       if (saved.secretAccessKey) setSecretAccessKey(saved.secretAccessKey)
       if (saved.region)          setRegion(saved.region)
+      setHadSavedCredentials(!!saved.accessKeyId)
     })
     window.electronAPI.encryptionAvailable().then(({ ok }) => {
       if (!ok) setNoKeychain(true)
@@ -66,7 +74,17 @@ export default function LoginPage({ onNext, onBack }: LoginPageProps) {
       )}
 
       <h1 className="text-2xl font-semibold text-zinc-100 mb-1">AWS Credentials</h1>
-      <p className="text-zinc-400 text-sm mb-4">Enter your AWS credentials to continue.</p>
+      {hadSavedCredentials === true ? (
+        <p className="text-zinc-400 text-sm mb-4">
+          Your saved credentials couldn't be verified. Re-enter your <span className="text-zinc-200 font-medium">IAM user's</span> access key below — not root. (If root access keys were deleted during setup, they can't be recovered; create a new IAM access key from the AWS console instead.)
+        </p>
+      ) : hadSavedCredentials === false ? (
+        <p className="text-zinc-400 text-sm mb-4">
+          No credentials found yet. Enter your AWS <span className="text-zinc-200 font-medium">root account's</span> access key to begin setup — you'll create a dedicated IAM user and can retire this root key in the next step.
+        </p>
+      ) : (
+        <p className="text-zinc-400 text-sm mb-4">Enter your AWS credentials to continue.</p>
+      )}
 
       {noKeychain && (
         <div className="mb-4 px-3 py-2 bg-amber-900/40 border border-amber-700 rounded text-amber-300 text-xs">

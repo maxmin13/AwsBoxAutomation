@@ -2,8 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   @apply bg-zinc-900 text-zinc-100;
   margin: 0;
   font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
 }
+
+/* Thin, fade-in scrollbar — visible only on hover */
+.scrollbar-thin::-webkit-scrollbar        { width: 3px; }
+.scrollbar-thin::-webkit-scrollbar-track  { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb  { background: transparent; border-radius: 2px; }
+.scrollbar-thin:hover::-webkit-scrollbar-thumb { background: #52525b; }

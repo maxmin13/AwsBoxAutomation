@@ -40,7 +40,7 @@ async function writeCredsStore(data) {
 }
 
 // Channels excluded from IPC logging — keep credentials out of gui.log
-const SILENT_CHANNELS = new Set(['read-log', 'load-credentials', 'save-credentials', 'get-session-token'])
+const SILENT_CHANNELS = new Set(['read-log', 'load-credentials', 'save-credentials', 'get-session-token', 'create-iam-user', 'rotate-access-key'])
 
 function truncate(str, max = 120) {
   return str.length <= max ? str : str.slice(0, max) + ` …[+${str.length - max} chars]`
@@ -102,11 +102,16 @@ async function deleteAccessKeysIfRoot(client, creds) {
 
   const identity = await new STSClient({ region: 'us-east-1', credentials: creds })
     .send(new GetCallerIdentityCommand({}))
-  if (!identity.Arn?.endsWith(':root')) return false
+  if (!identity.Arn?.endsWith(':root')) {
+    log.info(`[ipc][root-key-deletion] caller "${identity.Arn}" is not root — declining to delete anything`)
+    return false
+  }
 
   const { AccessKeyMetadata = [] } = await client.send(new ListAccessKeysCommand({}))
+  log.info(`[ipc][root-key-deletion] root has ${AccessKeyMetadata.length} access key(s): ${AccessKeyMetadata.map(k => k.AccessKeyId).join(', ') || '(none)'}`)
   for (const key of AccessKeyMetadata) {
     await client.send(new DeleteAccessKeyCommand({ AccessKeyId: key.AccessKeyId }))
+    log.info(`[ipc][root-key-deletion] deleted root access key ${key.AccessKeyId}`)
   }
   return true
 }
@@ -250,8 +255,14 @@ function registerIpcHandlers(win) {
   // A safety check ensures we only delete keys when the caller is actually root.
 
   handleIpc('create-iam-user', async (_event, { username, policyArn, deleteRootKeys }) => {
+    // create-iam-user is in SILENT_CHANNELS (its reply carries a freshly
+    // minted secretAccessKey), so the generic recv/reply logging in
+    // handleIpc() is suppressed for this channel — log the non-secret
+    // parts explicitly instead, so the flow is still visible in gui.log.
+    log.info(`[ipc][create-iam-user] recv username="${username}" policyArn="${policyArn}" deleteRootKeys=${deleteRootKeys}`)
     const store = await readCredsStore()
     if (!store.accessKeyId || !store.secretAccessKey) {
+      log.info('[ipc][create-iam-user] no credentials configured')
       return { ok: false, error: 'No credentials configured. Save your AWS credentials first.' }
     }
     try {
@@ -261,12 +272,28 @@ function registerIpcHandlers(win) {
         AttachUserPolicyCommand,
         PutUserPolicyCommand,
         CreateAccessKeyCommand,
+        DeleteAccessKeyCommand,
+        ListAccessKeysCommand,
       } = require('@aws-sdk/client-iam')
+      const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts')
 
       const creds  = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
       const client = new IAMClient({ region: 'us-east-1', credentials: creds })
 
-      await client.send(new CreateUserCommand({ UserName: username }))
+      // CreateUser isn't idempotent, so a retry after an earlier partial
+      // failure (e.g. CreateAccessKey failed) would otherwise dead-end here
+      // with EntityAlreadyExists. Treat that one error as "resume" — the two
+      // calls below are already idempotent (AttachUserPolicy no-ops if
+      // already attached, PutUserPolicy overwrites), so it's safe to just
+      // carry on and finish provisioning this user.
+      let resumed = false
+      try {
+        await client.send(new CreateUserCommand({ UserName: username }))
+      } catch (err) {
+        if (err.name !== 'EntityAlreadyExistsException') throw err
+        resumed = true
+        log.info(`[ipc][create-iam-user] user "${username}" already exists — resuming (retry after earlier partial failure, or re-run with same name)`)
+      }
       await client.send(new AttachUserPolicyCommand({ UserName: username, PolicyArn: policyArn }))
       await client.send(new PutUserPolicyCommand({
         UserName:       username,
@@ -274,17 +301,108 @@ function registerIpcHandlers(win) {
         PolicyDocument: JSON.stringify(mfaEnforcementPolicy),
       }))
 
+      // CreateAccessKey is never idempotent — it always mints a new key, and
+      // IAM caps a user at 2. Check first so a resumed retry doesn't pile up
+      // keys, and so hitting the cap surfaces a clear message instead of a
+      // raw LimitExceeded error.
+      const { AccessKeyMetadata = [] } = await client.send(new ListAccessKeysCommand({ UserName: username }))
+      if (AccessKeyMetadata.length >= 2) {
+        log.info(`[ipc][create-iam-user] user "${username}" already has ${AccessKeyMetadata.length} access keys — declining to create another`)
+        return {
+          ok: false,
+          error: `IAM user "${username}" already has 2 access keys and neither secret can be retrieved again. Delete one in the AWS console, then retry.`,
+        }
+      }
+
       const keyResponse = await client.send(new CreateAccessKeyCommand({ UserName: username }))
       const key = keyResponse.AccessKey
+      log.info(`[ipc][create-iam-user] created access key ${key.AccessKeyId} for user "${username}"`)
+
+      // Verify the new key actually authenticates, persist it to disk, and
+      // only THEN delete root's key (if asked to). Doing it in this order
+      // means a crash/lost-IPC-response after this point can never leave
+      // disk pointing at a dead credential — by the time root's key is
+      // deleted, disk already holds a confirmed-working replacement.
+      try {
+        await new STSClient({ region: 'us-east-1', credentials: { accessKeyId: key.AccessKeyId, secretAccessKey: key.SecretAccessKey } })
+          .send(new GetCallerIdentityCommand({}))
+        log.info(`[ipc][create-iam-user] verified new access key ${key.AccessKeyId} authenticates`)
+      } catch (verifyErr) {
+        log.error(`[ipc][create-iam-user] new access key ${key.AccessKeyId} failed verification, deleting it`, verifyErr.message)
+        await client.send(new DeleteAccessKeyCommand({ AccessKeyId: key.AccessKeyId, UserName: username })).catch(() => {})
+        return { ok: false, error: 'New access key could not be verified — nothing was changed. IAM keys can take a few seconds to propagate; try again shortly.' }
+      }
+
+      await writeCredsStore({ ...store, accessKeyId: key.AccessKeyId, secretAccessKey: key.SecretAccessKey })
+      log.info(`[ipc][create-iam-user] persisted new access key ${key.AccessKeyId} to disk`)
 
       let rootKeysDeleted = false
       if (deleteRootKeys) {
         rootKeysDeleted = await deleteAccessKeysIfRoot(client, creds)
       }
 
-      return { ok: true, accessKeyId: key.AccessKeyId, secretAccessKey: key.SecretAccessKey, rootKeysDeleted }
+      log.info(`[ipc][create-iam-user] reply ok=true accessKeyId=${key.AccessKeyId} rootKeysDeleted=${rootKeysDeleted} resumed=${resumed}`)
+      return { ok: true, accessKeyId: key.AccessKeyId, secretAccessKey: key.SecretAccessKey, rootKeysDeleted, resumed }
     } catch (error) {
       log.error('[ipc][create-iam-user]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  // ── IAM user access key rotation ──────────────────────────────────────────
+  // iam:CreateAccessKey / iam:DeleteAccessKey aren't in mfa-enforcement-policy's
+  // no-MFA whitelist, so this only works with an active MFA-gated session
+  // (sessionStore.getActiveCredentials) — the renderer gates the button the
+  // same way as the other privileged security actions (withSession).
+  //
+  // Order matters: create the new key, verify it actually authenticates,
+  // THEN persist it to disk and delete the old one. If verification fails,
+  // the new key is deleted and nothing on disk changes — the old key (still
+  // valid) keeps working. This avoids ever locking the user out mid-rotation.
+  handleIpc('rotate-access-key', async () => {
+    log.info('[ipc][rotate-access-key] recv')
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      log.info('[ipc][rotate-access-key] no credentials configured')
+      return { ok: false, error: 'No credentials configured.' }
+    }
+    const oldAccessKeyId = store.accessKeyId
+    try {
+      const { IAMClient, CreateAccessKeyCommand, DeleteAccessKeyCommand } = require('@aws-sdk/client-iam')
+      const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts')
+      const creds  = sessionStore.getActiveCredentials(store)
+      const client = new IAMClient({ region: 'us-east-1', credentials: creds })
+
+      let newKey
+      try {
+        // UserName omitted — IAM infers "the caller's own user" from the
+        // signing credentials, which is what we want here.
+        ;({ AccessKey: newKey } = await client.send(new CreateAccessKeyCommand({})))
+      } catch (err) {
+        if (err.name === 'LimitExceededException') {
+          return { ok: false, error: 'This IAM user already has 2 access keys. Delete one in the AWS console before rotating.' }
+        }
+        throw err
+      }
+      log.info(`[ipc][rotate-access-key] created new access key ${newKey.AccessKeyId}`)
+
+      try {
+        await new STSClient({ region: 'us-east-1', credentials: { accessKeyId: newKey.AccessKeyId, secretAccessKey: newKey.SecretAccessKey } })
+          .send(new GetCallerIdentityCommand({}))
+      } catch (verifyErr) {
+        log.error('[ipc][rotate-access-key] new key failed verification, deleting it', verifyErr.message)
+        await client.send(new DeleteAccessKeyCommand({ AccessKeyId: newKey.AccessKeyId })).catch(() => {})
+        return { ok: false, error: 'New access key could not be verified — nothing was changed. IAM keys can take a few seconds to propagate; try again shortly.' }
+      }
+
+      await writeCredsStore({ ...store, accessKeyId: newKey.AccessKeyId, secretAccessKey: newKey.SecretAccessKey })
+      sessionStore.clearSession() // the old session was minted for the key we're about to delete
+      await client.send(new DeleteAccessKeyCommand({ AccessKeyId: oldAccessKeyId }))
+      log.info(`[ipc][rotate-access-key] reply ok=true newAccessKeyId=${newKey.AccessKeyId} deletedAccessKeyId=${oldAccessKeyId}`)
+
+      return { ok: true, accessKeyId: newKey.AccessKeyId, secretAccessKey: newKey.SecretAccessKey }
+    } catch (error) {
+      log.error('[ipc][rotate-access-key]', error.message)
       return { ok: false, error: error.message }
     }
   })
@@ -449,6 +567,28 @@ function registerIpcHandlers(win) {
     }
   })
 
+  handleIpc('disable-guardduty', async () => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured. Save your AWS credentials first.' }
+    }
+    try {
+      const { GuardDutyClient, ListDetectorsCommand, DeleteDetectorCommand } = require('@aws-sdk/client-guardduty')
+      const client = new GuardDutyClient({
+        region: store.region || 'eu-west-1',
+        credentials: sessionStore.getActiveCredentials(store),
+      })
+      const { DetectorIds = [] } = await client.send(new ListDetectorsCommand({}))
+      for (const DetectorId of DetectorIds) {
+        await client.send(new DeleteDetectorCommand({ DetectorId }))
+      }
+      return { ok: true }
+    } catch (error) {
+      log.error('[ipc][disable-guardduty]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
   // ── IAM Access Analyzer ───────────────────────────────────────────────────
 
   handleIpc('enable-access-analyzer', async () => {
@@ -488,13 +628,18 @@ function registerIpcHandlers(win) {
 
       const creds = sessionStore.getActiveCredentials(store)
 
-      const subscribers = [{ Address: email, Type: 'EMAIL' }]
-
+      // AWS caps IMMEDIATE-frequency anomaly subscriptions at exactly one
+      // subscriber — email and phone can't be registered as two separate
+      // entries. When both are set, fan them both out through a single
+      // shared SNS topic instead so there's only ever one subscriber.
+      let subscribers
       if (phone) {
         const { SNSClient } = require('@aws-sdk/client-sns')
         const snsClient = new SNSClient({ region: 'us-east-1', credentials: creds })
-        const TopicArn = await createAlertTopic(snsClient, { name: 'anomaly-sms-alerts', principal: 'costalerts.amazonaws.com', phone })
-        subscribers.push({ Address: TopicArn, Type: 'SNS' })
+        const TopicArn = await createAlertTopic(snsClient, { name: 'anomaly-sms-alerts', principal: 'costalerts.amazonaws.com', email, phone })
+        subscribers = [{ Address: TopicArn, Type: 'SNS' }]
+      } else {
+        subscribers = [{ Address: email, Type: 'EMAIL' }]
       }
 
       const client = new CostExplorerClient({ region: 'us-east-1', credentials: creds })
@@ -502,9 +647,13 @@ function registerIpcHandlers(win) {
       // Cost Explorer doesn't reject duplicate monitor/subscription names the
       // way Budgets does — re-running create would silently pile up a second
       // monitor and subscription. List first and update in place if found.
+      // AWS also caps accounts at one DIMENSIONAL monitor total, so reuse any
+      // existing one by type rather than requiring an exact name match — a
+      // stray monitor from earlier testing or the Console would otherwise
+      // cause CreateAnomalyMonitorCommand to fail with LimitExceededException.
       const monitorName = 'all-services-monitor'
       const { AnomalyMonitors = [] } = await client.send(new GetAnomalyMonitorsCommand({}))
-      let monitorArn = AnomalyMonitors.find(m => m.MonitorName === monitorName)?.MonitorArn
+      let monitorArn = AnomalyMonitors.find(m => m.MonitorType === 'DIMENSIONAL')?.MonitorArn
 
       if (!monitorArn) {
         const created = await client.send(new CreateAnomalyMonitorCommand({
@@ -542,6 +691,96 @@ function registerIpcHandlers(win) {
       return { ok: true }
     } catch (error) {
       log.error('[ipc][create-anomaly-detection]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  // ── Cost summary (free) ───────────────────────────────────────────────────
+  // Reads the existing AWS Budget (created in create-billing-alert) for a free
+  // month-to-date actual + forecasted total. No Cost Explorer calls here.
+
+  handleIpc('get-cost-summary', async () => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured. Save your AWS credentials first.' }
+    }
+    try {
+      const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts')
+      const { BudgetsClient, DescribeBudgetCommand } = require('@aws-sdk/client-budgets')
+
+      const creds = sessionStore.getActiveCredentials(store)
+
+      const identity = await new STSClient({ region: 'us-east-1', credentials: creds })
+        .send(new GetCallerIdentityCommand({}))
+
+      const budgetsClient = new BudgetsClient({ region: 'us-east-1', credentials: creds })
+
+      let budget
+      try {
+        ({ Budget: budget } = await budgetsClient.send(new DescribeBudgetCommand({
+          AccountId:  identity.Account,
+          BudgetName: 'monthly-limit',
+        })))
+      } catch (error) {
+        if (error.name === 'NotFoundException') return { ok: true, configured: false }
+        throw error
+      }
+
+      return {
+        ok:              true,
+        configured:      true,
+        limit:           budget.BudgetLimit.Amount,
+        unit:            budget.BudgetLimit.Unit,
+        actualSpend:     budget.CalculatedSpend?.ActualSpend?.Amount ?? '0',
+        forecastedSpend: budget.CalculatedSpend?.ForecastedSpend?.Amount ?? null,
+        periodEnd:       budget.TimePeriod?.End ?? null,
+      }
+    } catch (error) {
+      log.error('[ipc][get-cost-summary]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  // ── Cost breakdown by service (paid — Cost Explorer bills per request) ─────
+  // Only called when the user explicitly clicks "Show breakdown by service".
+
+  handleIpc('get-cost-breakdown', async () => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured. Save your AWS credentials first.' }
+    }
+    try {
+      const { CostExplorerClient, GetCostAndUsageCommand } = require('@aws-sdk/client-cost-explorer')
+
+      const creds  = sessionStore.getActiveCredentials(store)
+      const client = new CostExplorerClient({ region: 'us-east-1', credentials: creds })
+
+      const now   = new Date()
+      const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10)
+      const tomorrow = new Date(now)
+      tomorrow.setDate(tomorrow.getDate() + 1)
+      const end = tomorrow.toISOString().slice(0, 10) // End is exclusive — include today's cost
+
+      const { ResultsByTime = [] } = await client.send(new GetCostAndUsageCommand({
+        TimePeriod:  { Start: start, End: end },
+        Granularity: 'MONTHLY',
+        Metrics:     ['UnblendedCost'],
+        GroupBy:     [{ Type: 'DIMENSION', Key: 'SERVICE' }],
+      }))
+
+      const groups = ResultsByTime[0]?.Groups ?? []
+      const services = groups
+        .map(g => ({
+          service: g.Keys[0],
+          amount:  g.Metrics.UnblendedCost.Amount,
+          unit:    g.Metrics.UnblendedCost.Unit,
+        }))
+        .filter(s => parseFloat(s.amount) > 0)
+        .sort((a, b) => parseFloat(b.amount) - parseFloat(a.amount))
+
+      return { ok: true, services, start, end }
+    } catch (error) {
+      log.error('[ipc][get-cost-breakdown]', error.message)
       return { ok: false, error: error.message }
     }
   })
@@ -586,6 +825,47 @@ function registerIpcHandlers(win) {
     }
   })
 
+  handleIpc('disable-sms-security-alert', async () => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured. Save your AWS credentials first.' }
+    }
+    try {
+      const { SNSClient, DeleteTopicCommand } = require('@aws-sdk/client-sns')
+      const { EventBridgeClient, RemoveTargetsCommand, DeleteRuleCommand } = require('@aws-sdk/client-eventbridge')
+      const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts')
+
+      const region = store.region || 'eu-west-1'
+      const creds  = sessionStore.getActiveCredentials(store)
+      const ruleName = 'guardduty-high-severity-findings'
+
+      const ebClient = new EventBridgeClient({ region, credentials: creds })
+      try {
+        await ebClient.send(new RemoveTargetsCommand({ Rule: ruleName, Ids: [`${ruleName}-target`] }))
+        await ebClient.send(new DeleteRuleCommand({ Name: ruleName }))
+      } catch (error) {
+        if (error.name !== 'ResourceNotFoundException') throw error
+      }
+
+      // Topic name is deterministic (same one enable-sms-security-alert
+      // creates via createAlertTopic), so its ARN can be built directly
+      // without a ListTopics round-trip.
+      const { Account } = await new STSClient({ region: 'us-east-1', credentials: creds })
+        .send(new GetCallerIdentityCommand({}))
+      const TopicArn = `arn:aws:sns:${region}:${Account}:guardduty-security-alerts`
+      try {
+        await new SNSClient({ region, credentials: creds }).send(new DeleteTopicCommand({ TopicArn }))
+      } catch (error) {
+        if (error.name !== 'NotFoundException') throw error
+      }
+
+      return { ok: true }
+    } catch (error) {
+      log.error('[ipc][disable-sms-security-alert]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
   // ── Root credential status ────────────────────────────────────────────────
   // Calls GetAccountSummary to check whether root access keys and root MFA are
   // enabled. Works with both root and IAM credentials (needs iam:GetAccountSummary).
@@ -610,9 +890,11 @@ function registerIpcHandlers(win) {
       const isRoot = identityRes.Arn?.endsWith(':root') ?? false
 
       let iamMfaEnabled = false
+      let iamUsername
       if (!isRoot) {
         const { MFADevices = [] } = await iam.send(new ListMFADevicesCommand({}))
         iamMfaEnabled = MFADevices.length > 0
+        iamUsername = identityRes.Arn?.split('/').pop()
       }
 
       return {
@@ -622,6 +904,7 @@ function registerIpcHandlers(win) {
         accountId:   identityRes.Account,
         isRoot,
         iamMfaEnabled,
+        iamUsername,
       }
     } catch (error) {
       log.error('[ipc][check-root-credentials]', error.message)
@@ -663,11 +946,34 @@ function registerIpcHandlers(win) {
       return { ok: false, error: 'No credentials configured.' }
     }
     try {
-      const { IAMClient, CreateVirtualMFADeviceCommand } = require('@aws-sdk/client-iam')
+      const {
+        IAMClient,
+        CreateVirtualMFADeviceCommand,
+        ListVirtualMFADevicesCommand,
+        DeleteVirtualMFADeviceCommand,
+      } = require('@aws-sdk/client-iam')
       const creds = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
+      const client = new IAMClient({ region: 'us-east-1', credentials: creds })
+      const name   = deviceName || 'root-account-mfa-device'
 
-      const { VirtualMFADevice } = await new IAMClient({ region: 'us-east-1', credentials: creds })
-        .send(new CreateVirtualMFADeviceCommand({ VirtualMFADeviceName: deviceName || 'root-account-mfa-device' }))
+      let VirtualMFADevice
+      try {
+        ({ VirtualMFADevice } = await client.send(
+          new CreateVirtualMFADeviceCommand({ VirtualMFADeviceName: name })))
+      } catch (error) {
+        if (error.name !== 'EntityAlreadyExistsException') throw error
+        // A device with this name exists but was never enabled (e.g. a
+        // previous attempt failed after creation) — AWS only returns the
+        // QR/seed once, at creation, so the only way to get a fresh one is
+        // to delete the orphaned, unassigned device and recreate it.
+        const { VirtualMFADevices = [] } = await client.send(
+          new ListVirtualMFADevicesCommand({ AssignmentStatus: 'Unassigned' }))
+        const orphan = VirtualMFADevices.find(d => d.SerialNumber?.endsWith(`:mfa/${name}`))
+        if (!orphan) throw error
+        await client.send(new DeleteVirtualMFADeviceCommand({ SerialNumber: orphan.SerialNumber }))
+        ;({ VirtualMFADevice } = await client.send(
+          new CreateVirtualMFADeviceCommand({ VirtualMFADeviceName: name })))
+      }
 
       return {
         ok:           true,
@@ -683,7 +989,10 @@ function registerIpcHandlers(win) {
 
   // ── Enable MFA device ─────────────────────────────────────────────────────
   // Activates the virtual MFA device using two consecutive TOTP codes.
-  // Omitting UserName causes the API to apply the device to the caller (root).
+  // UserName is a required field on this API (unlike ListMFADevices, which
+  // defaults to the caller when omitted) — root has no IAM UserName, so AWS's
+  // documented workaround for enabling root's own MFA device via this API is
+  // to pass the 12-digit account ID as UserName instead.
 
   handleIpc('enable-mfa-device', async (_event, { serialNumber, authCode1, authCode2, userName }) => {
     const store = await readCredsStore()
@@ -694,9 +1003,17 @@ function registerIpcHandlers(win) {
       const { IAMClient, EnableMFADeviceCommand } = require('@aws-sdk/client-iam')
       const creds = { accessKeyId: store.accessKeyId, secretAccessKey: store.secretAccessKey }
 
+      let targetUserName = userName
+      if (!targetUserName) {
+        const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts')
+        const identity = await new STSClient({ region: 'us-east-1', credentials: creds })
+          .send(new GetCallerIdentityCommand({}))
+        targetUserName = identity.Account
+      }
+
       await new IAMClient({ region: 'us-east-1', credentials: creds })
         .send(new EnableMFADeviceCommand({
-          ...(userName ? { UserName: userName } : {}), // omitted ⇒ API applies to caller (root)
+          UserName:            targetUserName,
           SerialNumber:        serialNumber,
           AuthenticationCode1: authCode1,
           AuthenticationCode2: authCode2,
@@ -710,17 +1027,27 @@ function registerIpcHandlers(win) {
   })
 
   // ── STS session (MFA-gated) ───────────────────────────────────────────────
-  // Mints a 4-hour STS session for the IAM user using their own MFA device.
-  // The base permanent creds are used to call GetSessionToken (this is one of
-  // the actions the mfa-enforcement-policy exempts from requiring MFA itself);
-  // the resulting session lives only in-memory (session-store.js) and is what
-  // subsequent privileged handlers use via sessionStore.getActiveCredentials().
+  // Mints an STS session for the IAM user using their own MFA device, with a
+  // caller-chosen duration (default 4h). The base permanent creds are used to
+  // call GetSessionToken (this is one of the actions the mfa-enforcement-policy
+  // exempts from requiring MFA itself); the resulting session lives only
+  // in-memory (session-store.js) and is what subsequent privileged handlers
+  // use via sessionStore.getActiveCredentials().
 
-  handleIpc('get-session-token', async (_event, { authCode }) => {
+  // GetSessionToken's own limits for an IAM user (not root): 900s (15 min) to
+  // 129600s (36 hours).
+  const MIN_SESSION_SECONDS = 900
+  const MAX_SESSION_SECONDS = 129600
+
+  handleIpc('get-session-token', async (_event, { authCode, durationSeconds }) => {
     const store = await readCredsStore()
     if (!store.accessKeyId || !store.secretAccessKey) {
       return { ok: false, error: 'No credentials configured.' }
     }
+    const clampedDuration = Math.min(
+      MAX_SESSION_SECONDS,
+      Math.max(MIN_SESSION_SECONDS, durationSeconds || 14400)
+    )
     try {
       const { IAMClient, ListMFADevicesCommand } = require('@aws-sdk/client-iam')
       const { STSClient, GetSessionTokenCommand } = require('@aws-sdk/client-sts')
@@ -734,7 +1061,7 @@ function registerIpcHandlers(win) {
       }
 
       const { Credentials } = await new STSClient({ region: 'us-east-1', credentials: creds })
-        .send(new GetSessionTokenCommand({ SerialNumber: serialNumber, TokenCode: authCode, DurationSeconds: 14400 }))
+        .send(new GetSessionTokenCommand({ SerialNumber: serialNumber, TokenCode: authCode, DurationSeconds: clampedDuration }))
 
       sessionStore.setSession({
         baseAccessKeyId: store.accessKeyId,
