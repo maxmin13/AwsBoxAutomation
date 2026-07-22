@@ -422,6 +422,8 @@ function registerIpcHandlers(win) {
         CreateBudgetCommand,
         UpdateBudgetCommand,
         CreateSubscriberCommand,
+        DeleteSubscriberCommand,
+        DescribeSubscribersForNotificationCommand,
       } = require('@aws-sdk/client-budgets')
 
       const creds = sessionStore.getActiveCredentials(store)
@@ -463,25 +465,109 @@ function registerIpcHandlers(win) {
         if (error.name !== 'DuplicateRecordException') throw error
         // A budget from a previous run already exists under this fixed name —
         // update its limit in place instead of creating a second budget, then
-        // (re-)attach subscribers (ignoring "already subscribed").
+        // reconcile subscribers. AWS Budgets allows only one subscriber per
+        // SubscriptionType (EMAIL/SNS) per notification, and its "already
+        // subscribed" duplicate detection isn't reliable for SNS — retrying
+        // with the exact same topic ARN can still fail with a
+        // LimitExceededException ("...can only have 1 subscribers with type
+        // of SNS") instead of DuplicateRecordException. So look up what's
+        // already attached first: skip subscribers that already match
+        // exactly, and delete any stale one of the same type before adding a
+        // changed address (e.g. the user updated the alert email/phone).
         await budgetsClient.send(new UpdateBudgetCommand({ AccountId: identity.Account, NewBudget: newBudget }))
+
+        const { Subscribers: existingSubscribers = [] } = await budgetsClient.send(
+          new DescribeSubscribersForNotificationCommand({ AccountId: identity.Account, BudgetName: budgetName, Notification: notification })
+        )
+
         for (const subscriber of subscribers) {
-          try {
-            await budgetsClient.send(new CreateSubscriberCommand({
-              AccountId:    identity.Account,
-              BudgetName:   budgetName,
-              Notification: notification,
-              Subscriber:   subscriber,
-            }))
-          } catch (subError) {
-            if (subError.name !== 'DuplicateRecordException') throw subError
+          const alreadyPresent = existingSubscribers.some(
+            s => s.SubscriptionType === subscriber.SubscriptionType && s.Address === subscriber.Address
+          )
+          if (alreadyPresent) {
+            log.info('[ipc][create-billing-alert] subscriber already attached, skipping', subscriber.SubscriptionType)
+            continue
           }
+
+          const staleSameType = existingSubscribers.filter(s => s.SubscriptionType === subscriber.SubscriptionType)
+          for (const stale of staleSameType) {
+            log.info('[ipc][create-billing-alert] replacing stale subscriber', stale.SubscriptionType, stale.Address)
+            await budgetsClient.send(new DeleteSubscriberCommand({
+              AccountId: identity.Account, BudgetName: budgetName, Notification: notification, Subscriber: stale,
+            }))
+          }
+
+          await budgetsClient.send(new CreateSubscriberCommand({
+            AccountId:    identity.Account,
+            BudgetName:   budgetName,
+            Notification: notification,
+            Subscriber:   subscriber,
+          }))
         }
       }
 
       return { ok: true }
     } catch (error) {
       log.error('[ipc][create-billing-alert]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  // Reads back the billing alert set up above, if any, so the setup wizard can
+  // pre-fill the form and show it as already done on a fresh app launch —
+  // without this, local component state has no way to know AWS already has
+  // one configured. The SNS subscriber's Address is a topic ARN, not a phone
+  // number, so recovering the phone needs one extra SNS lookup on that topic.
+  handleIpc('describe-billing-alert', async () => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured. Save your AWS credentials first.' }
+    }
+    try {
+      const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts')
+      const { BudgetsClient, DescribeBudgetCommand, DescribeSubscribersForNotificationCommand } = require('@aws-sdk/client-budgets')
+      const { SNSClient, ListSubscriptionsByTopicCommand } = require('@aws-sdk/client-sns')
+
+      const creds = sessionStore.getActiveCredentials(store)
+      const identity = await new STSClient({ region: 'us-east-1', credentials: creds })
+        .send(new GetCallerIdentityCommand({}))
+
+      const budgetsClient = new BudgetsClient({ region: 'us-east-1', credentials: creds })
+      const budgetName = 'monthly-limit'
+
+      let budget
+      try {
+        ({ Budget: budget } = await budgetsClient.send(new DescribeBudgetCommand({
+          AccountId: identity.Account, BudgetName: budgetName,
+        })))
+      } catch (error) {
+        if (error.name === 'NotFoundException') return { ok: true, configured: false }
+        throw error
+      }
+
+      const notification = {
+        NotificationType:   'ACTUAL',
+        ComparisonOperator: 'GREATER_THAN',
+        Threshold:          80,
+        ThresholdType:      'PERCENTAGE',
+      }
+      const { Subscribers = [] } = await budgetsClient.send(new DescribeSubscribersForNotificationCommand({
+        AccountId: identity.Account, BudgetName: budgetName, Notification: notification,
+      }))
+
+      const email        = Subscribers.find(s => s.SubscriptionType === 'EMAIL')?.Address ?? null
+      const snsTopicArn   = Subscribers.find(s => s.SubscriptionType === 'SNS')?.Address ?? null
+
+      let phone = null
+      if (snsTopicArn) {
+        const sns = new SNSClient({ region: 'us-east-1', credentials: creds })
+        const { Subscriptions = [] } = await sns.send(new ListSubscriptionsByTopicCommand({ TopicArn: snsTopicArn }))
+        phone = Subscriptions.find(s => s.Protocol === 'sms')?.Endpoint ?? null
+      }
+
+      return { ok: true, configured: true, amount: budget.BudgetLimit?.Amount ?? null, email, phone }
+    } catch (error) {
+      log.error('[ipc][describe-billing-alert]', error.message)
       return { ok: false, error: error.message }
     }
   })
@@ -691,6 +777,48 @@ function registerIpcHandlers(win) {
       return { ok: true }
     } catch (error) {
       log.error('[ipc][create-anomaly-detection]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  // Reads back the cost anomaly subscription set up above, if any — same
+  // pre-fill purpose as describe-billing-alert. Looks up the shared
+  // DIMENSIONAL monitor and the fixed 'anomaly-alert' subscription name that
+  // create-anomaly-detection uses, then resolves the SNS topic (if any) to a
+  // phone number the same way.
+  handleIpc('describe-anomaly-detection', async () => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured. Save your AWS credentials first.' }
+    }
+    try {
+      const { CostExplorerClient, GetAnomalyMonitorsCommand, GetAnomalySubscriptionsCommand } = require('@aws-sdk/client-cost-explorer')
+      const { SNSClient, ListSubscriptionsByTopicCommand } = require('@aws-sdk/client-sns')
+
+      const creds  = sessionStore.getActiveCredentials(store)
+      const client = new CostExplorerClient({ region: 'us-east-1', credentials: creds })
+
+      const { AnomalyMonitors = [] } = await client.send(new GetAnomalyMonitorsCommand({}))
+      const monitorArn = AnomalyMonitors.find(m => m.MonitorType === 'DIMENSIONAL')?.MonitorArn
+      if (!monitorArn) return { ok: true, configured: false }
+
+      const { AnomalySubscriptions = [] } = await client.send(new GetAnomalySubscriptionsCommand({ MonitorArn: monitorArn }))
+      const subscription = AnomalySubscriptions.find(s => s.SubscriptionName === 'anomaly-alert')
+      if (!subscription) return { ok: true, configured: false }
+
+      const email      = subscription.Subscribers?.find(s => s.Type === 'EMAIL')?.Address ?? null
+      const snsTopicArn = subscription.Subscribers?.find(s => s.Type === 'SNS')?.Address ?? null
+
+      let phone = null
+      if (snsTopicArn) {
+        const sns = new SNSClient({ region: 'us-east-1', credentials: creds })
+        const { Subscriptions = [] } = await sns.send(new ListSubscriptionsByTopicCommand({ TopicArn: snsTopicArn }))
+        phone = Subscriptions.find(s => s.Protocol === 'sms')?.Endpoint ?? null
+      }
+
+      return { ok: true, configured: true, threshold: subscription.Threshold ?? null, email, phone }
+    } catch (error) {
+      log.error('[ipc][describe-anomaly-detection]', error.message)
       return { ok: false, error: error.message }
     }
   })
@@ -1119,6 +1247,47 @@ function registerIpcHandlers(win) {
       return { ok: true }
     } catch (error) {
       log.error('[ipc][create-root-login-alarm]', error.message)
+      return { ok: false, error: error.message }
+    }
+  })
+
+  // Reads back the root login alarm set up above, if any — same pre-fill
+  // purpose as the other describe-* handlers. Unlike Budgets/Cost Explorer,
+  // EventBridge has no "list subscribers" API tied to the rule, so this finds
+  // the fixed-name SNS topic independently (by ARN suffix) and lists its
+  // subscriptions directly to recover the email/phone.
+  handleIpc('describe-root-login-alarm', async () => {
+    const store = await readCredsStore()
+    if (!store.accessKeyId || !store.secretAccessKey) {
+      return { ok: false, error: 'No credentials configured.' }
+    }
+    try {
+      const { EventBridgeClient, DescribeRuleCommand } = require('@aws-sdk/client-eventbridge')
+      const { SNSClient, ListTopicsCommand, ListSubscriptionsByTopicCommand } = require('@aws-sdk/client-sns')
+
+      const region = store.region || 'eu-west-1'
+      const creds  = sessionStore.getActiveCredentials(store)
+
+      const eb = new EventBridgeClient({ region, credentials: creds })
+      try {
+        await eb.send(new DescribeRuleCommand({ Name: 'root-account-login-alarm' }))
+      } catch (error) {
+        if (error.name === 'ResourceNotFoundException') return { ok: true, configured: false }
+        throw error
+      }
+
+      const sns = new SNSClient({ region, credentials: creds })
+      const { Topics = [] } = await sns.send(new ListTopicsCommand({}))
+      const topic = Topics.find(t => t.TopicArn?.endsWith(':root-login-alarm'))
+      if (!topic) return { ok: true, configured: true, email: null, phone: null }
+
+      const { Subscriptions = [] } = await sns.send(new ListSubscriptionsByTopicCommand({ TopicArn: topic.TopicArn }))
+      const email = Subscriptions.find(s => s.Protocol === 'email')?.Endpoint ?? null
+      const phone = Subscriptions.find(s => s.Protocol === 'sms')?.Endpoint ?? null
+
+      return { ok: true, configured: true, email, phone }
+    } catch (error) {
+      log.error('[ipc][describe-root-login-alarm]', error.message)
       return { ok: false, error: error.message }
     }
   })

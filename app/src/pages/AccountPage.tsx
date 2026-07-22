@@ -86,6 +86,7 @@ export default function AccountPage() {
   const [budgetBusy,   setBudgetBusy]   = useState(false)
   const [budgetError,  setBudgetError]  = useState<string | null>(null)
   const [budgetDone,   setBudgetDone]   = useState(false)
+  const [billingChecked, setBillingChecked] = useState(false)
 
   // ── Cost anomaly detection ────────────────────────────────────────────────
   const [anomalyThreshold, setAnomalyThreshold] = useState('10')
@@ -94,6 +95,7 @@ export default function AccountPage() {
   const [anomalyBusy,      setAnomalyBusy]      = useState(false)
   const [anomalyError,     setAnomalyError]     = useState<string | null>(null)
   const [anomalyDone,      setAnomalyDone]      = useState(false)
+  const [anomalyChecked,   setAnomalyChecked]   = useState(false)
 
   // ── Root login alarm ──────────────────────────────────────────────────────
   const [alarmEmail, setAlarmEmail] = useState('')
@@ -101,6 +103,11 @@ export default function AccountPage() {
   const [alarmBusy,  setAlarmBusy]  = useState(false)
   const [alarmError, setAlarmError] = useState<string | null>(null)
   const [alarmDone,  setAlarmDone]  = useState(false)
+  const [alarmChecked, setAlarmChecked] = useState(false)
+
+  // ── Step 4 batch submit ───────────────────────────────────────────────────
+  const [alertsSubmitting, setAlertsSubmitting] = useState(false)
+  const [alertsDescribed,  setAlertsDescribed]  = useState(false)
 
   // ── Security toggles ──────────────────────────────────────────────────────
   type S = { busy: boolean; done: boolean; error: string | null }
@@ -141,6 +148,39 @@ export default function AccountPage() {
       setPageMode('detail')
     })
   }, [hasCredentials])
+
+  // Pre-fill Step 4 from whatever's already configured in AWS — local state
+  // otherwise has no memory of a previous run once the app restarts. Needs an
+  // active session (these describe calls aren't on the enforcement policy's
+  // self-service allow-list), which is guaranteed once wizardStep reaches 4
+  // via the normal flow; runs once and leaves fields alone if nothing's set.
+  useEffect(() => {
+    if (wizardStep !== 4 || alertsDescribed || !sessionMinted) return
+    setAlertsDescribed(true)
+
+    window.electronAPI.describeBillingAlert().then(res => {
+      if (!res.ok || !res.configured) return
+      setBudgetDone(true)
+      if (res.amount) setBudgetAmount(res.amount)
+      if (res.email)  setBudgetEmail(res.email)
+      if (res.phone)  setBudgetPhone(res.phone)
+    })
+
+    window.electronAPI.describeAnomalyDetection().then(res => {
+      if (!res.ok || !res.configured) return
+      setAnomalyDone(true)
+      if (res.threshold != null) setAnomalyThreshold(String(res.threshold))
+      if (res.email) setAnomalyEmail(res.email)
+      if (res.phone) setAnomalyPhone(res.phone)
+    })
+
+    window.electronAPI.describeRootLoginAlarm().then(res => {
+      if (!res.ok || !res.configured) return
+      setAlarmDone(true)
+      if (res.email) setAlarmEmail(res.email)
+      if (res.phone) setAlarmPhone(res.phone)
+    })
+  }, [wizardStep, sessionMinted, alertsDescribed])
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -231,7 +271,7 @@ export default function AccountPage() {
       const res = await window.electronAPI.enableMfaDevice(iamMfaSerial, iamMfaCode1.trim(), iamMfaCode2.trim(), iamUsername)
       setIamMfaBusy(false)
       if (res.ok) {
-        setIamMfaDone(true); setIamMfaStep(3)
+        setIamMfaDone(true); setIamMfaStep(0)
       } else {
         setIamMfaError(res.error ?? 'Unknown error')
       }
@@ -246,42 +286,96 @@ export default function AccountPage() {
       setSessionBusy(false)
       if (res.ok) {
         setSessionMinted(true); setIamMfaStep(0)
+        setWizardStep(4)
       } else {
         setSessionError(res.error ?? 'Unknown error')
       }
     })
   }
 
-  function handleCreateBillingAlert() {
+  function submitBillingAlert(): Promise<boolean> {
     const amount = parseFloat(budgetAmount)
-    if (!amount || !budgetEmail.trim()) return
-    requireCreds(() => withSession(async () => {
-      setBudgetBusy(true); setBudgetError(null); setBudgetDone(false)
-      const res = await window.electronAPI.createBillingAlert(amount, budgetEmail.trim(), budgetPhone.trim() || undefined)
-      setBudgetBusy(false)
-      res.ok ? setBudgetDone(true) : setBudgetError(res.error ?? 'Unknown error')
-    }))
+    return new Promise(resolve => {
+      requireCreds(() => withSession(async () => {
+        console.log('[account-setup] submitting billing alert', { amount, email: budgetEmail })
+        setBudgetBusy(true); setBudgetError(null)
+        const res = await window.electronAPI.createBillingAlert(amount, budgetEmail.trim(), budgetPhone.trim() || undefined)
+        setBudgetBusy(false)
+        if (res.ok) {
+          setBudgetDone(true)
+          console.log('[account-setup] billing alert created')
+        } else {
+          setBudgetError(res.error ?? 'Unknown error')
+          console.error('[account-setup] billing alert failed', res.error)
+        }
+        resolve(res.ok)
+      }))
+    })
   }
 
-  function handleCreateAnomalyDetection() {
+  function submitAnomalyDetection(): Promise<boolean> {
     const threshold = parseFloat(anomalyThreshold)
-    if (!threshold || !anomalyEmail.trim()) return
-    requireCreds(() => withSession(async () => {
-      setAnomalyBusy(true); setAnomalyError(null); setAnomalyDone(false)
-      const res = await window.electronAPI.createAnomalyDetection(threshold, anomalyEmail.trim(), anomalyPhone.trim() || undefined)
-      setAnomalyBusy(false)
-      res.ok ? setAnomalyDone(true) : setAnomalyError(res.error ?? 'Unknown error')
-    }))
+    return new Promise(resolve => {
+      requireCreds(() => withSession(async () => {
+        console.log('[account-setup] submitting cost anomaly detection', { threshold, email: anomalyEmail })
+        setAnomalyBusy(true); setAnomalyError(null)
+        const res = await window.electronAPI.createAnomalyDetection(threshold, anomalyEmail.trim(), anomalyPhone.trim() || undefined)
+        setAnomalyBusy(false)
+        if (res.ok) {
+          setAnomalyDone(true)
+          console.log('[account-setup] cost anomaly detection enabled')
+        } else {
+          setAnomalyError(res.error ?? 'Unknown error')
+          console.error('[account-setup] cost anomaly detection failed', res.error)
+        }
+        resolve(res.ok)
+      }))
+    })
   }
 
-  function handleCreateRootAlarm() {
-    if (!alarmEmail.trim()) return
-    requireCreds(() => withSession(async () => {
-      setAlarmBusy(true); setAlarmError(null); setAlarmDone(false)
-      const res = await window.electronAPI.createRootLoginAlarm(alarmEmail.trim(), alarmPhone.trim() || undefined)
-      setAlarmBusy(false)
-      res.ok ? setAlarmDone(true) : setAlarmError(res.error ?? 'Unknown error')
-    }))
+  function submitRootAlarm(): Promise<boolean> {
+    return new Promise(resolve => {
+      requireCreds(() => withSession(async () => {
+        console.log('[account-setup] submitting root login alarm', { email: alarmEmail })
+        setAlarmBusy(true); setAlarmError(null)
+        const res = await window.electronAPI.createRootLoginAlarm(alarmEmail.trim(), alarmPhone.trim() || undefined)
+        setAlarmBusy(false)
+        if (res.ok) {
+          setAlarmDone(true)
+          console.log('[account-setup] root login alarm created')
+        } else {
+          setAlarmError(res.error ?? 'Unknown error')
+          console.error('[account-setup] root login alarm failed', res.error)
+        }
+        resolve(res.ok)
+      }))
+    })
+  }
+
+  async function handleContinueFromAlerts() {
+    setAlertsSubmitting(true)
+    console.log('[account-setup] step 4 continue', { billingChecked, anomalyChecked, alarmChecked, budgetDone, anomalyDone, alarmDone })
+
+    if (billingChecked && !budgetDone) {
+      await submitBillingAlert()
+    } else {
+      console.log('[account-setup] billing alert not submitted', budgetDone ? '(already done)' : '(not selected)')
+    }
+
+    if (anomalyChecked && !anomalyDone) {
+      await submitAnomalyDetection()
+    } else {
+      console.log('[account-setup] cost anomaly detection not submitted', anomalyDone ? '(already done)' : '(not selected)')
+    }
+
+    if (alarmChecked && !alarmDone) {
+      await submitRootAlarm()
+    } else {
+      console.log('[account-setup] root login alarm not submitted', alarmDone ? '(already done)' : '(not selected)')
+    }
+
+    setAlertsSubmitting(false)
+    setWizardStep(5)
   }
 
   function handleEnableSmsAlert() {
@@ -333,6 +427,15 @@ export default function AccountPage() {
   const isValidEmail  = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.trim())
   const isValidPhone  = (v: string) => /^\+\d{7,15}$/.test(v.trim())
   const pricingLink   = (url: string, label = 'AWS pricing ↗') => <PricingLink url={url} label={label} />
+
+  // ── Step 4 checkbox validity — a checked card must have valid fields before Next Step submits it
+  const billingValid  = !!parseFloat(budgetAmount) && isValidEmail(budgetEmail) && (!budgetPhone || isValidPhone(budgetPhone))
+  const anomalyValid  = !!parseFloat(anomalyThreshold) && isValidEmail(anomalyEmail) && (!anomalyPhone || isValidPhone(anomalyPhone))
+  const alarmValid    = isValidEmail(alarmEmail) && (!alarmPhone || isValidPhone(alarmPhone))
+  const alertsNextDisabled = alertsSubmitting ||
+    (billingChecked && !budgetDone && !billingValid) ||
+    (anomalyChecked && !anomalyDone && !anomalyValid) ||
+    (alarmChecked && !alarmDone && !alarmValid)
 
   const ic = (value: string) =>
     'w-full px-2 py-1 bg-zinc-700 border rounded text-zinc-100 text-xs ' +
@@ -459,9 +562,9 @@ export default function AccountPage() {
               placeholder="Code 2 (next 30s window)" className={ic(iamMfaCode2)} />
           </>
         )}
-        {iamMfaStep === 3 && (
+        {iamMfaDone && !sessionMinted && (
           <>
-            <p className="text-zinc-400 text-xs">MFA activated. Enter a fresh code to start your first session.</p>
+            <p className="text-zinc-400 text-xs">MFA activated. A new session token will be requested when you continue.</p>
             <label className="text-zinc-400 text-xs">Session length</label>
             <select value={sessionDuration} onChange={e => setSessionDuration(Number(e.target.value))}
               className={ic(String(sessionDuration))}>
@@ -476,10 +579,7 @@ export default function AccountPage() {
             {sessionError && <p className="text-red-400 text-xs">{sessionError}</p>}
           </>
         )}
-        {iamMfaDone && iamMfaStep === 0 && !sessionMinted && (
-          <p className="text-zinc-500 text-xs">MFA is already enabled — start a fresh session to continue.</p>
-        )}
-        {iamMfaDone && iamMfaStep === 0 && sessionMinted && (
+        {iamMfaDone && sessionMinted && (
           <>
             <p className="text-green-400 text-xs">MFA activated — session started.</p>
             <p className="text-zinc-600 text-xs">
@@ -494,9 +594,6 @@ export default function AccountPage() {
           {iamMfaBusy ? 'Generating QR...' : 'Set Up IAM User MFA'}
         </button>
       )}
-      {iamMfaDone && iamMfaStep === 0 && !sessionMinted && (
-        <button onClick={() => setIamMfaStep(3)} className={primaryBtn}>Start Session →</button>
-      )}
       {iamMfaStep === 1 && <button onClick={() => setIamMfaStep(2)} className={primaryBtn}>Next: Enter Codes →</button>}
       {iamMfaStep === 2 && (
         <div className="flex flex-col gap-1.5">
@@ -505,11 +602,6 @@ export default function AccountPage() {
           </button>
           <button onClick={() => setIamMfaStep(1)} disabled={iamMfaBusy} className="text-xs text-zinc-500 hover:text-zinc-300 text-center py-0.5">← Back</button>
         </div>
-      )}
-      {iamMfaStep === 3 && (
-        <button onClick={handleMintFirstSession} disabled={sessionBusy || sessionCode.length < 6} className={primaryBtn}>
-          {sessionBusy ? 'Starting...' : 'Start Session'}
-        </button>
       )}
     </div>
   )
@@ -563,70 +655,64 @@ export default function AccountPage() {
 
   const billingCard = (
     <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-4 flex flex-col gap-3">
-      <div>
+      <div className="min-h-[88px]">
         <p className="text-zinc-200 text-xs font-semibold">Set Billing Alert</p>
         <p className="text-zinc-500 text-xs mt-0.5">Creates a monthly budget — email alert when 80% is reached.</p>
         <p className="text-amber-600 text-xs mt-0.5">Free (first 2 budgets/account) · {pricingLink('https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/')}</p>
       </div>
       <div className="flex flex-col gap-1.5 flex-1">
-        <div className="flex gap-2">
-          <div className="w-20 shrink-0">
-            <label className="text-zinc-400 text-xs">Limit (USD/mo)</label>
-            <input type="number" min="1" value={budgetAmount} onChange={e => setBudgetAmount(e.target.value)} onWheel={e => e.currentTarget.blur()} className={ic(budgetAmount) + ' mt-1'} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <label className="text-zinc-400 text-xs">Alert email</label>
-            <input type="email" value={budgetEmail} onChange={e => setBudgetEmail(e.target.value)} placeholder="you@example.com" className={ic(budgetEmail) + ' mt-1'} />
-          </div>
-        </div>
+        <label className="text-zinc-400 text-xs">Limit (USD/mo)</label>
+        <input type="number" min="1" value={budgetAmount} onChange={e => setBudgetAmount(e.target.value)} onWheel={e => e.currentTarget.blur()} className={ic(budgetAmount)} />
+        <label className="text-zinc-400 text-xs">Alert email</label>
+        <input type="email" value={budgetEmail} onChange={e => setBudgetEmail(e.target.value)} placeholder="you@example.com" className={ic(budgetEmail)} />
         <label className="text-zinc-400 text-xs">SMS phone <span className="text-zinc-600">(optional)</span></label>
         <input type="tel" value={budgetPhone} onChange={e => setBudgetPhone(e.target.value)} placeholder="+353871234567" className={ic(budgetPhone)} />
         {budgetError && <p className="text-red-400 text-xs">{budgetError}</p>}
         {budgetDone  && <p className="text-green-400 text-xs">Budget created — alert at 80% of ${budgetAmount}/month.</p>}
       </div>
-      <button onClick={handleCreateBillingAlert} {...iamGated(!budgetAmount || !isValidEmail(budgetEmail) || (!!budgetPhone && !isValidPhone(budgetPhone)) || budgetBusy || budgetDone)}>
-        {budgetBusy ? 'Creating...' : budgetDone ? 'Alert Created' : 'Set Billing Alert'}
-      </button>
+      <label className={`flex items-center gap-2 text-xs ${iamReady ? 'text-zinc-300' : 'text-zinc-600'}`}>
+        <input type="checkbox" checked={budgetDone || billingChecked} disabled={!iamReady || budgetDone || budgetBusy}
+          onChange={e => setBillingChecked(e.target.checked)} className="w-3.5 h-3.5" />
+        {budgetBusy ? 'Creating...' : budgetDone ? 'Alert created' : 'Set billing alert'}
+      </label>
     </div>
   )
 
   const anomalyCard = (
     <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-4 flex flex-col gap-3">
-      <div>
+      <div className="min-h-[88px]">
         <p className="text-zinc-200 text-xs font-semibold">Cost Anomaly Detection</p>
         <p className="text-zinc-500 text-xs mt-0.5">Immediate email alert when spending spikes unexpectedly, regardless of your monthly budget.</p>
         <p className="text-amber-600 text-xs mt-0.5">Free · {pricingLink('https://aws.amazon.com/aws-cost-management/aws-cost-anomaly-detection/pricing/')}</p>
       </div>
       <div className="flex flex-col gap-1.5 flex-1">
-        <div className="flex gap-2">
-          <div className="w-20 shrink-0">
-            <label className="text-zinc-400 text-xs">Threshold (USD)</label>
-            <input type="number" min="1" value={anomalyThreshold} onChange={e => setAnomalyThreshold(e.target.value)} onWheel={e => e.currentTarget.blur()} className={ic(anomalyThreshold) + ' mt-1'} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <label className="text-zinc-400 text-xs">Alert email</label>
-            <input type="email" value={anomalyEmail} onChange={e => setAnomalyEmail(e.target.value)} placeholder="you@example.com" className={ic(anomalyEmail) + ' mt-1'} />
-          </div>
-        </div>
+        <label className="text-zinc-400 text-xs">Threshold (USD)</label>
+        <input type="number" min="1" value={anomalyThreshold} onChange={e => setAnomalyThreshold(e.target.value)} onWheel={e => e.currentTarget.blur()} className={ic(anomalyThreshold)} />
+        <label className="text-zinc-400 text-xs">Alert email</label>
+        <input type="email" value={anomalyEmail} onChange={e => setAnomalyEmail(e.target.value)} placeholder="you@example.com" className={ic(anomalyEmail)} />
         <label className="text-zinc-400 text-xs">SMS phone <span className="text-zinc-600">(optional)</span></label>
         <input type="tel" value={anomalyPhone} onChange={e => setAnomalyPhone(e.target.value)} placeholder="+353871234567" className={ic(anomalyPhone)} />
         {anomalyError && <p className="text-red-400 text-xs">{anomalyError}</p>}
         {anomalyDone  && <p className="text-green-400 text-xs">Enabled — alerts on spikes above ${anomalyThreshold}.</p>}
       </div>
-      <button onClick={handleCreateAnomalyDetection} {...iamGated(!anomalyThreshold || !isValidEmail(anomalyEmail) || (!!anomalyPhone && !isValidPhone(anomalyPhone)) || anomalyBusy || anomalyDone)}>
-        {anomalyBusy ? 'Enabling...' : anomalyDone ? 'Enabled' : 'Enable Anomaly Detection'}
-      </button>
+      <label className={`flex items-center gap-2 text-xs ${iamReady ? 'text-zinc-300' : 'text-zinc-600'}`}>
+        <input type="checkbox" checked={anomalyDone || anomalyChecked} disabled={!iamReady || anomalyDone || anomalyBusy}
+          onChange={e => setAnomalyChecked(e.target.checked)} className="w-3.5 h-3.5" />
+        {anomalyBusy ? 'Enabling...' : anomalyDone ? 'Enabled' : 'Enable anomaly detection'}
+      </label>
     </div>
   )
 
   const alarmCard = (
     <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-4 flex flex-col gap-3">
-      <div>
+      <div className="min-h-[88px]">
         <p className="text-zinc-200 text-xs font-semibold">Root Login Alarm</p>
         <p className="text-zinc-500 text-xs mt-0.5">Email alert on every root console sign-in via EventBridge + SNS.</p>
         <p className="text-amber-600 text-xs mt-0.5">Free · {pricingLink('https://aws.amazon.com/sns/pricing/')}</p>
       </div>
       <div className="flex flex-col gap-1.5 flex-1">
+        <label className="invisible text-xs" aria-hidden="true">Spacer</label>
+        <input tabIndex={-1} aria-hidden="true" disabled className={ic('') + ' invisible'} />
         <label className="text-zinc-400 text-xs">Alert email</label>
         <input type="email" value={alarmEmail} onChange={e => setAlarmEmail(e.target.value)} placeholder="you@example.com" className={ic(alarmEmail)} />
         <label className="text-zinc-400 text-xs">SMS phone <span className="text-zinc-600">(optional)</span></label>
@@ -634,9 +720,11 @@ export default function AccountPage() {
         {alarmError && <p className="text-red-400 text-xs">{alarmError}</p>}
         {alarmDone  && <p className="text-green-400 text-xs">Alarm created — confirm the subscription email from AWS.</p>}
       </div>
-      <button onClick={handleCreateRootAlarm} {...iamGated(!isValidEmail(alarmEmail) || (!!alarmPhone && !isValidPhone(alarmPhone)) || alarmBusy || alarmDone)}>
-        {alarmBusy ? 'Creating...' : alarmDone ? 'Alarm Created' : 'Create Root Login Alarm'}
-      </button>
+      <label className={`flex items-center gap-2 text-xs ${iamReady ? 'text-zinc-300' : 'text-zinc-600'}`}>
+        <input type="checkbox" checked={alarmDone || alarmChecked} disabled={!iamReady || alarmDone || alarmBusy}
+          onChange={e => setAlarmChecked(e.target.checked)} className="w-3.5 h-3.5" />
+        {alarmBusy ? 'Creating...' : alarmDone ? 'Alarm created' : 'Create root login alarm'}
+      </label>
     </div>
   )
 
@@ -838,7 +926,11 @@ export default function AccountPage() {
             <p className="text-zinc-500 text-xs">{stepNote[3]}</p>
             <div className="w-full">{iamMfaCard}</div>
             <div className="w-full flex justify-end">
-              {navBtn('Next Step →', () => setWizardStep(4), !(iamMfaDone && sessionMinted))}
+              {navBtn(
+                sessionBusy ? 'Requesting session…' : 'Next Step →',
+                () => sessionMinted ? setWizardStep(4) : handleMintFirstSession(),
+                !iamMfaDone || sessionBusy || (!sessionMinted && sessionCode.trim().length < 6)
+              )}
             </div>
           </div>
         )}
@@ -853,7 +945,7 @@ export default function AccountPage() {
               {alarmCard}
             </div>
             <div className="flex justify-end">
-              {navBtn('Next Step →', () => setWizardStep(5))}
+              {navBtn(alertsSubmitting ? 'Submitting…' : 'Next Step →', handleContinueFromAlerts, alertsNextDisabled)}
             </div>
           </div>
         )}

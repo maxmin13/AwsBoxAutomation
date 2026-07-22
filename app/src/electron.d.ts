@@ -56,12 +56,14 @@ declare global {
       createIamUser:          (username: string, policyArn: string, deleteRootKeys?: boolean) => Promise<{ ok: boolean; error?: string; accessKeyId?: string; secretAccessKey?: string; rootKeysDeleted?: boolean; resumed?: boolean }>
       rotateAccessKey:        () => Promise<{ ok: boolean; error?: string; accessKeyId?: string; secretAccessKey?: string }>
       createBillingAlert:     (amount: number, email: string, phone?: string) => Promise<{ ok: boolean; error?: string }>
+      describeBillingAlert:   () => Promise<{ ok: boolean; error?: string; configured?: boolean; amount?: string; email?: string; phone?: string }>
       setIamPasswordPolicy:   () => Promise<{ ok: boolean; error?: string }>
       blockS3PublicAccess:    () => Promise<{ ok: boolean; error?: string }>
       enableGuardDuty:        () => Promise<{ ok: boolean; error?: string }>
       disableGuardDuty:       () => Promise<{ ok: boolean; error?: string }>
       enableAccessAnalyzer:   () => Promise<{ ok: boolean; error?: string }>
       createAnomalyDetection:  (threshold: number, email: string, phone?: string) => Promise<{ ok: boolean; error?: string }>
+      describeAnomalyDetection: () => Promise<{ ok: boolean; error?: string; configured?: boolean; threshold?: number; email?: string; phone?: string }>
       enableSmsSecurityAlert:  (phone: string) => Promise<{ ok: boolean; error?: string }>
       disableSmsSecurityAlert: () => Promise<{ ok: boolean; error?: string }>
 
@@ -73,6 +75,7 @@ declare global {
       createVirtualMfaDevice: (deviceName?: string) => Promise<{ ok: boolean; error?: string; serialNumber?: string; qrCodePng?: string; base32Seed?: string }>
       enableMfaDevice:        (serialNumber: string, authCode1: string, authCode2: string, userName?: string) => Promise<{ ok: boolean; error?: string }>
       createRootLoginAlarm:   (email: string, phone?: string) => Promise<{ ok: boolean; error?: string }>
+      describeRootLoginAlarm: () => Promise<{ ok: boolean; error?: string; configured?: boolean; email?: string; phone?: string }>
 
       getSessionToken:  (authCode: string, durationSeconds?: number) => Promise<{ ok: boolean; error?: string; expiresAt?: number }>
       getSessionStatus: () => Promise<{ ok: boolean; active?: boolean; expiresAt?: number }>

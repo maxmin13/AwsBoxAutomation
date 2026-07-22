@@ -12,9 +12,11 @@
 
 # in the account summary page add a card with the admin user details
 
-# to complete the account setup journey do we need to start a user session
-# if not, remove the start session button provide only a check box
-# if mandatory, remove the start session button, mention in a note that a new token will be requested
 # can the user select the duration of the session
 # is it right to remind the user that to invalidate the token he has to rotate the keys
 
+# update docs, root keys, user keys and session token
+
+# in aws console generate new access keys for root, check the enable mfa page, remove the enable button
+# and make the delete keys action happen when the user clicks next button, provide a message
+# on the page warning the user (it may already be there)

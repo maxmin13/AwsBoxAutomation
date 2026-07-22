@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createBillingAlert: (amount, email, phone) =>
     ipcRenderer.invoke('create-billing-alert', { amount, email, phone }),
 
+  describeBillingAlert: () =>
+    ipcRenderer.invoke('describe-billing-alert'),
+
   setIamPasswordPolicy: () =>
     ipcRenderer.invoke('set-iam-password-policy'),
 
@@ -54,6 +57,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   createAnomalyDetection: (threshold, email, phone) =>
     ipcRenderer.invoke('create-anomaly-detection', { threshold, email, phone }),
+
+  describeAnomalyDetection: () =>
+    ipcRenderer.invoke('describe-anomaly-detection'),
 
   enableSmsSecurityAlert: (phone) =>
     ipcRenderer.invoke('enable-sms-security-alert', { phone }),
@@ -83,6 +89,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   createRootLoginAlarm: (email, phone) =>
     ipcRenderer.invoke('create-root-login-alarm', { email, phone }),
+
+  describeRootLoginAlarm: () =>
+    ipcRenderer.invoke('describe-root-login-alarm'),
 
   // ── MFA-gated session ─────────────────────────────────────
   getSessionToken: (authCode, durationSeconds) =>
